@@ -42,6 +42,20 @@ and Peter Sewell.  Earlier versions had an internal ASL parser instead of using
 asl-interpreter;  Alastair Reid, Kathryn Gray, and Anthony Fox contributed to
 those versions.
 
+## Funding
+
+The development of this software was partially supported by EPSRC grant
+EP/K008528/1 (REMS).
+This project has received funding from the European Research Council (ERC)
+under the European Union’s Horizon 2020 research and innovation programme
+(grant agreement No 789108, ELVER).
+This work is part of the CIFV project sponsored by the Defense Advanced
+Research Projects Agency (DARPA) and the Air Force Research Laboratory (AFRL),
+under contract FA8650-18-C-7809.  The views, opinions, and/or findings
+contained in this work are those of the authors and should not be interpreted
+as representing the official views or policies, either expressed or implied, of
+the Department of Defense or the U.S. Government.
+
 [asli]: https://github.com/rems-project/asl-interpreter
 [sail]: https://github.com/rems-project/sail
 [sail-www]: https://www.cl.cam.ac.uk/~pes20/sail/
