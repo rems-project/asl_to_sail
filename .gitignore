@@ -1,0 +1,5 @@
+.*.swp
+.*.un~
+_build
+*.native
+asl_to_sail
