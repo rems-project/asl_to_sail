@@ -44,17 +44,15 @@ those versions.
 
 ## Funding
 
-The development of this software was partially supported by EPSRC grant
-EP/K008528/1 (REMS).
+This software was developed within the Rigorous Engineering of
+Mainstream Systems (REMS) project, partly funded by EPSRC grant
+EP/K008528/1, at the University of Cambridge.
 This project has received funding from the European Research Council (ERC)
 under the European Union’s Horizon 2020 research and innovation programme
 (grant agreement No 789108, ELVER).
-This work is part of the CIFV project sponsored by the Defense Advanced
-Research Projects Agency (DARPA) and the Air Force Research Laboratory (AFRL),
-under contract FA8650-18-C-7809.  The views, opinions, and/or findings
-contained in this work are those of the authors and should not be interpreted
-as representing the official views or policies, either expressed or implied, of
-the Department of Defense or the U.S. Government.
+This software was developed by the University of
+Cambridge Computer Laboratory (Department of Computer Science and
+Technology) under DARPA/AFRL contract FA8650-18-C-7809 ("CIFV").
 
 [asli]: https://github.com/rems-project/asl-interpreter
 [sail]: https://github.com/rems-project/sail
