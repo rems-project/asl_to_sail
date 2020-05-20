@@ -1,2 +1,2 @@
-true: package(asli.libASL), package(sail), use_menhir
+true: package(asli.libASL), package(sail), use_menhir, thread
 <main.native>: package(zarith)
