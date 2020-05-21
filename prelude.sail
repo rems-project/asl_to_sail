@@ -210,18 +210,23 @@ union exception = {
   Error_ExceptionTaken : unit,
   Error_Unpredictable : unit,
   Error_ConstrainedUnpredictable : unit,
-  Error_SError : bool
+  Error_SError : unit
 }
 
 val IsUNDEFINED : exception -> bool
 val IsUNPREDICTABLE : exception -> bool
 val IsSEE : exception -> bool
 val IsExceptionTaken : exception -> bool
+val IsSError : exception -> bool
 
 function IsUNDEFINED ex = match ex { Error_Undefined() => true, _ => false }
 function IsUNPREDICTABLE ex = match ex { Error_Unpredictable() => true, _ => false }
 function IsSEE ex = match ex { Error_See(_) => true, _ => false }
 function IsExceptionTaken ex = match ex { Error_ExceptionTaken() => true, _ => false }
+function IsSError ex = match ex { Error_SError() => true, _ => false }
+
+val ThrowSError : unit -> unit effect {escape}
+function ThrowSError() = throw(Error_SError())
 
 val ReservedEncoding : unit -> unit effect {escape}
 function ReservedEncoding() = throw(Error_ReservedEncoding())
