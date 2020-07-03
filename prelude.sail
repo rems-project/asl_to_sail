@@ -264,7 +264,12 @@ function print_newline () = print_endline("")
 
 overload println = {print_endline, print_newline}
 
-val "putchar" : int -> unit
+val putchar = {
+  ocaml: "putchar",
+  lem: "putchar",
+  interpreter: "putchar",
+  c: "sail_putchar"
+} : int -> unit
 
 val __IMPDEF_boolean : string -> bool
 val __IMPDEF_integer : string -> int
@@ -276,8 +281,18 @@ val PL_of_VL : forall 'vl, 'vl >= 0. int('vl) -> int(div('vl, 8))
 
 function PL_of_VL(vl) = DIV(vl, 8)
 
-val "__ReadMemory" : forall 'n, 'n >= 0. (int('n), bits(56)) -> bits(8 * 'n) effect {rmem}
-val "__WriteMemory" : forall 'n, 'n >= 0. (int('n), bits(56), bits(8 * 'n)) -> unit effect {wmem}
+val ___ReadRAM = "read_ram" : forall 'n 'm.
+  (atom('m), atom('n), bits('m), bits('m)) -> bits(8 * 'n) effect {rmem}
+val ___WriteRAM = "write_ram" : forall 'n 'm.
+  (atom('m), atom('n), bits('m), bits('m), bits(8 * 'n)) -> unit effect {wmem}
+
+val __ReadMemory = {lem: "__ReadMemory"} : forall 'n, 'n >= 0. (int('n), bits(56)) -> bits(8 * 'n) effect {rmem}
+function __ReadMemory(n, addr) = {
+  let result = ___ReadRAM(56, n, sail_zeros(56), addr);
+  result
+}
+val __WriteMemory = {lem: "__WriteMemory"} : forall 'n, 'n >= 0. (int('n), bits(56), bits(8 * 'n)) -> unit effect {wmem}
+function __WriteMemory(n, addr, value) = ___WriteRAM(56, n, sail_zeros(56), addr, value)
 
 val __ReadRAM : forall 'a 'n, 0 < 'a <= 56 & 'n >= 0. (int('a), int('n), bits('a), bits('a)) -> bits(8 * 'n) effect {rmem}
 function __ReadRAM(a, n, mem, addr) = __ReadMemory(n, sail_zero_extend(addr, 56))
