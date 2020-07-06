@@ -696,7 +696,8 @@ and iterate_check n env sail =
      | Some (quants, locals, ncs) ->
         let fix_quant sail quant =
           match Type_error.analyze_unresolved_quant locals ncs quant with
-          | Type_error.Suggest_add_constraint nc ->
+          | Type_error.Suggest_add_constraint nc
+            when not (prove __POS__ env' (nc_not nc)) ->
              begin
                try
                  Sail_to_sail.rewrite_add_constraint l env nc ncs sail
@@ -708,7 +709,7 @@ and iterate_check n env sail =
                   prerr_endline Util.(msg |> red |> clear);
                   sail
              end
-          | Type_error.Suggest_none ->
+          | _ ->
              prerr_endline "No suggestion";
              sail
         in
