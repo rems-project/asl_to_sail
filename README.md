@@ -33,6 +33,13 @@ $EDITOR environment variables must be set. By default patches are stored in the
 patches/ directory (which you may need to create). A custom patch directory can
 also be used.
 
+### Overrides
+
+If there are multiple definitions of a function in the ASL sources the desired
+one can be specified using an overrides file and option.  Each line of an
+overrides file names a function and the file that its definition should be
+taken from, separated by a space.
+
 ## Licence and contributions
 
 This tool is distributed under the 2-clause BSD licence in [LICENCE][licence].
