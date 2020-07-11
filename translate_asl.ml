@@ -60,6 +60,7 @@ type ctx = {
   fun_constraints : Ast.n_constraint Bindings.t;
   bound_exprs : ident ExprMap.t;
   fun_args : (ASL_AST.ty * ASL_AST.ident) list;
+  fun_ret_typ : ASL_AST.ty option;
   locals : lvar Bindings.t;
 }
 
@@ -75,6 +76,7 @@ let empty_ctx = {
   fun_constraints = Bindings.empty;
   bound_exprs = ExprMap.empty;
   fun_args = [];
+  fun_ret_typ = None;
   locals = Bindings.empty;
 }
 
@@ -1051,41 +1053,47 @@ let int_of_slice_width (slice : ASL_AST.slice) =
 
 let measure_none = Measure_aux (Measure_none, Parse_ast.Unknown)
 
-let rec add_final_return_stmt ty stmts =
-  let ret = Stmt_FunReturn (Expr_Unknown ty, Unknown) in
+let rec add_final_return_stmt stmts =
+  (* We could use Stmt_FunReturn (Expr_Unknown ty) here, but below we translate
+     Expr_Unknown to a call to an UNKNOWN function, and we'd like to reserve
+     that for uses of the UNKNOWN keyword in the original ASL source.
+     Instead, we insert a Stmt_ProcReturn here, and map it to a
+     return(undefined) Sail expression below (resolving the type for the
+     undefined literal from the context.) *)
+  let ret = Stmt_ProcReturn (Unknown) in
   match List.rev stmts with
   | Stmt_FunReturn (_, _) :: _
   | (Stmt_Throw _ | Stmt_Unpred _ | Stmt_See _ | Stmt_ExceptionTaken _) :: _
   | (Stmt_ImpDef _ | Stmt_Undefined _ | Stmt_Dep_ImpDef _) :: _ ->
      stmts
   | Stmt_If (c, t, es, e, l) :: rstmts ->
-     let t' = add_final_return_stmt ty t in
-     let es' = List.map (add_final_return_elsif ty) es in
-     let e' = add_final_return_stmt ty e in
+     let t' = add_final_return_stmt t in
+     let es' = List.map (add_final_return_elsif) es in
+     let e' = add_final_return_stmt e in
      List.rev (Stmt_If (c, t', es', e', l) :: rstmts)
   | Stmt_Case (e, alts, otherwise, l) :: rstmts ->
-     let alts' = List.map (add_final_return_alt ty) alts in
-     let otherwise' = add_final_return_optstmts ty otherwise in
+     let alts' = List.map (add_final_return_alt) alts in
+     let otherwise' = add_final_return_optstmts otherwise in
      List.rev (Stmt_Case (e, alts', otherwise', l) :: rstmts)
   | Stmt_Try (stmts, ex, catchers, otherwise, l) :: rstmts ->
-     let stmts' = add_final_return_stmt ty stmts in
-     let catchers' = List.map (add_final_return_catcher ty) catchers in
-     let otherwise' = add_final_return_optstmts ty otherwise in
+     let stmts' = add_final_return_stmt stmts in
+     let catchers' = List.map (add_final_return_catcher) catchers in
+     let otherwise' = add_final_return_optstmts otherwise in
      List.rev (Stmt_Try (stmts', ex, catchers', otherwise', l) :: rstmts)
   | rstmts -> List.rev (ret :: rstmts)
 
-and add_final_return_elsif ty (S_Elsif_Cond (e, stmts)) =
-  S_Elsif_Cond (e, add_final_return_stmt ty stmts)
+and add_final_return_elsif (S_Elsif_Cond (e, stmts)) =
+  S_Elsif_Cond (e, add_final_return_stmt stmts)
 
-and add_final_return_alt ty (Alt_Alt (pat, guard, stmts)) =
-  Alt_Alt (pat, guard, add_final_return_stmt ty stmts)
+and add_final_return_alt (Alt_Alt (pat, guard, stmts)) =
+  Alt_Alt (pat, guard, add_final_return_stmt  stmts)
 
-and add_final_return_catcher ty (Catcher_Guarded (e, stmts)) =
-  Catcher_Guarded (e, add_final_return_stmt ty stmts)
+and add_final_return_catcher (Catcher_Guarded (e, stmts)) =
+  Catcher_Guarded (e, add_final_return_stmt stmts)
 
-and add_final_return_optstmts ty = function
-  | Some stmts -> Some (add_final_return_stmt ty stmts)
-  | None -> Some (add_final_return_stmt ty [])
+and add_final_return_optstmts = function
+  | Some stmts -> Some (add_final_return_stmt stmts)
+  | None -> Some (add_final_return_stmt [])
 
 let args_of_exps args =
   if args = [] then [mk_lit_exp L_unit] else args
@@ -1155,6 +1163,11 @@ let rec sail_of_expr ctx (expr : ASL_AST.expr) =
      mk_exp (E_id (sail_id_of_ident id))
   | ASL_AST.Expr_Parens e ->
      recur e
+  | ASL_AST.Expr_Unknown (Type_Constructor id) ->
+     let id' = sail_id_of_ident id in
+     mk_exp (E_app (prepend_id "__UNKNOWN_" id', [mk_lit_exp L_unit]))
+  | ASL_AST.Expr_Unknown (Type_Bits n) ->
+     mk_exp (E_app (mk_id "__UNKNOWN_bits", [recur n]))
   | ASL_AST.Expr_Unknown ty ->
      mk_exp (E_cast (sail_of_ty ctx ty, mk_lit_exp L_undef))
   | ASL_AST.Expr_ImpDef (ASL_AST.Type_Constructor tid, s) ->
@@ -1531,7 +1544,11 @@ and sail_of_stmt ctx (stmt : ASL_AST.stmt) =
   | ASL_AST.Stmt_FunReturn (e, _) ->
      mk_exp (E_return (sail_of_expr ctx e))
   | ASL_AST.Stmt_ProcReturn _ ->
-     mk_exp (E_return (mk_lit_exp L_unit))
+     let ret_val = match ctx.fun_ret_typ with
+       | Some ty -> mk_exp (E_cast (sail_of_ty ctx ty, mk_lit_exp L_undef))
+       | None -> mk_lit_exp L_unit
+     in
+     mk_exp (E_return ret_val)
   | ASL_AST.Stmt_Assert (e, l) ->
      mk_exp (E_assert (sail_of_expr ctx e, mk_lit_exp (L_string "")))
   | ASL_AST.Stmt_TCall (abort, _, [], _) when name_of_ident abort = "__abort" ->
@@ -1916,8 +1933,9 @@ let sail_fundef_of_decl ctx id ret_ty args stmts =
   let ctx = List.fold_left add_vl_ctx ctx vl_bindings in
   (* Add arguments to context *)
   let declare_arg (ty, id) ctx = declare_immutable id (sail_of_ty ctx ty) ctx in
+  let is_proc = (ret_ty = ASL_TC.type_unit) in
   let ctx' =
-    { ctx with fun_args = args }
+    { ctx with fun_args = args; fun_ret_typ = (if is_proc then None else Some ret_ty) }
     |> List.fold_right declare_arg args
   in
   (* For functions, add final return statements to all branches.
@@ -1925,9 +1943,8 @@ let sail_fundef_of_decl ctx id ret_ty args stmts =
      EndOfInstruction() or similar, and it is not clear to the Sail
      typechecker that this removes the need for returning a value
      in that branch. *)
-  let is_proc = (ret_ty = ASL_TC.type_unit) in
   let body =
-    (if is_proc then stmts else add_final_return_stmt ret_ty stmts)
+    (if is_proc then stmts else add_final_return_stmt stmts)
     |> sail_of_stmts ~force_block:true ctx'
     |> add_mutated_decls
     |> List.fold_right bind_vl_exp vl_bindings
@@ -2109,6 +2126,15 @@ let initialise_vars (ics : int_constraint Bindings.t) stmts =
   in
   rewrite stmts
 
+let unknown_fun id typ =
+  let fun_id = prepend_id "__UNKNOWN_" id in
+  let fun_typ = function_typ [unit_typ] typ no_effect in
+  let typschm = mk_typschm (mk_typquant []) fun_typ in
+  let pat = mk_pat (P_lit (mk_lit L_unit)) in
+  let body = mk_lit_exp L_undef in
+  [mk_val_spec (VS_val_spec (typschm, fun_id, [], false));
+   mk_fundef [mk_funcl fun_id pat body]]
+
 let sail_of_declaration ctx (decl : ASL_AST.declaration) =
   (* PPrint.ToChannel.pretty 1. 120 stderr (ASL_PP.pp_declaration decl); *)
   match decl with
@@ -2118,6 +2144,7 @@ let sail_of_declaration ctx (decl : ASL_AST.declaration) =
      let tvars = ASL_Utils.unionSets (List.map (fun (ty, _) -> ASL_Utils.fv_type ty) fields) in
      let tq = mk_typquant (List.map mk_qi_kopt (kopts_of_vars ctx tvars)) in
      [DEF_type (TD_aux (TD_record (id', tq, List.map field' fields, false), no_annot))]
+     @ (if IdentSet.is_empty tvars then unknown_fun id' (mk_id_typ id') else [])
   (* TODO
      It turns out that asli already desugars bitfield accesses, so we can
      just treat bitfields as bitvectors (which the fallthrough cases below
@@ -2142,10 +2169,12 @@ let sail_of_declaration ctx (decl : ASL_AST.declaration) =
      let kopts = kopts_of_vars ctx (ASL_Utils.fv_type ty) in
      let tq = mk_typquant (List.map mk_qi_kopt kopts) in
      [DEF_type (TD_aux (TD_abbrev (id', tq, arg_typ ty'), no_annot))]
+     @ (if kopts = [] then unknown_fun id' ty' else [])
   | Decl_Enum (id, ids, l) ->
      let id' = sail_type_id_of_ident id in
      let ids' = List.map sail_id_of_ident ids in
      [DEF_type (TD_aux (TD_enum (id', ids', false), no_annot))]
+     @ unknown_fun id' (mk_id_typ id')
   | Decl_Var (ty, id, l) ->
      let id' = sail_id_of_ident id in
      let ty' = sail_of_ty ctx ty in

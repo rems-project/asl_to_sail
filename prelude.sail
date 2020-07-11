@@ -275,6 +275,16 @@ val putchar = {
 val __IMPDEF_boolean : string -> bool
 val __IMPDEF_integer : string -> int
 
+val __UNKNOWN_bits : forall 'n, 'n >= 0. int('n) -> bits('n)
+function __UNKNOWN_bits(n) = undefined
+
+function __UNKNOWN_integer() : unit -> int = undefined
+function __UNKNOWN_boolean() : unit -> bool = undefined
+function __UNKNOWN_real() : unit -> real = undefined
+function __UNKNOWN_string() : unit -> string = undefined
+function __UNKNOWN_bit() : unit -> bits(1) = undefined
+function __UNKNOWN_signal() : unit -> signal = undefined
+
 type is_VL('vl : Int) -> Bool = (128 <= 'vl <= 2048 & mod('vl, 128) == 0)
 type is_PL('pl : Int) -> Bool = (16 <= 'pl <= 256 & mod('pl, 16) == 0)
 
