@@ -9,6 +9,7 @@ $include <string.sail>
 $include <real.sail>
 $include <reverse_endianness.sail>
 $include <mono_rewrites.sail>
+$define ARM_SPEC
 $include <regfp.sail>
 
 val eq_any = {ocaml: "(fun (x, y) -> x = y)", interpreter: "eq_anything", lem: "eq", coq: "generic_eq", c: "eq_anything"} : forall ('a : Type). ('a, 'a) -> bool
