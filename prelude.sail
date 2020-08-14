@@ -119,6 +119,9 @@ function IsOnes(x) = (x == sail_ones('n))
 val Bit : bits(1) -> bit
 function Bit(b) = b[0]
 
+val Bits : bit -> bits(1)
+function Bits(b) = (if b == bitone then 0b1 else 0b0)
+
 val integer_subrange : forall 'hi 'lo. (int, int('hi), int('lo)) -> bits('hi - 'lo + 1)
 function integer_subrange(i, hi, lo) = get_slice_int(hi - lo + 1, i, lo)
 
