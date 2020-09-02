@@ -747,7 +747,9 @@ and convert_ast ctx = function
            write_sail (Ast.Defs sail) (orig_file is_forward chunk);
 
            try
-             let (Ast.Defs sail) = Initial_check.process_ast (Process_file.preprocess_ast [] (Process_file.parse_file (patch_file is_forward chunk))) in
+             let file = patch_file is_forward chunk in
+             let _, parsed_ast = Process_file.parse_file file in
+             let (Ast.Defs sail) = Initial_check.process_ast (Parse_ast.Defs [(file, Process_file.preprocess [] parsed_ast)]) in
              sail
            with
            | Reporting.Fatal_error e ->
@@ -759,7 +761,9 @@ and convert_ast ctx = function
            (* Try loading val-specs from the patch file, but translate the remaining decls from ASL *)
            try
              let (val_decls, decls) = List.partition is_val_decl decls in
-             let (Ast.Defs vals) = Initial_check.process_ast (Process_file.preprocess_ast [] (Process_file.parse_file (patch_file true chunk))) in
+             let file = patch_file true chunk in
+             let _, parsed_ast = Process_file.parse_file file in
+             let (Ast.Defs vals) = Initial_check.process_ast (Parse_ast.Defs [(file, Process_file.preprocess [] parsed_ast)]) in
              let check_vals () = Type_check.check ctx.tc_env (Ast.Defs vals) in
              let (_, env) = report_sail_error ctx val_decls vals check_vals (fun _ -> exit 1) in
              let ctx = { ctx with tc_env = env } in
