@@ -61,7 +61,7 @@ This software was developed by the University of
 Cambridge Computer Laboratory (Department of Computer Science and
 Technology) under DARPA/AFRL contract FA8650-18-C-7809 ("CIFV").
 
-[asli]: https://github.com/rems-project/asl-interpreter
+[asli]: https://github.com/alastairreid/asl-interpreter
 [sail]: https://github.com/rems-project/sail
 [sail-www]: https://www.cl.cam.ac.uk/~pes20/sail/
 [popl2019]: https://www.cl.cam.ac.uk/~pes20/sail/popl2019.html
