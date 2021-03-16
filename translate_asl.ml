@@ -1,4 +1,5 @@
 open Ast
+open Ast_defs
 open Ast_util
 open LibASL.Asl_ast
 open LibASL.Asl_utils
@@ -2362,6 +2363,8 @@ let sail_of_declaration ctx (decl : ASL_AST.declaration) =
   | Decl_BuiltinType (_, _)
   | Decl_Forward (_, _) -> []
 
+let ast_of_declaration ctx decl = { empty_ast with defs = sail_of_declaration ctx decl }
+
 let sail_of_maps ctx (decls: ASL_AST.declaration list) =
   let add_mapdef mapdefs = function
     | Decl_NewMapDefn (ret_ty, name, args, fallthrough, l) ->
@@ -2419,6 +2422,8 @@ let sail_of_maps ctx (decls: ASL_AST.declaration list) =
   in
   List.map sail_of_mapdef (ASL_Utils.Bindings.bindings mapdefs')
 
+let ast_of_maps ctx decls = { empty_ast with defs = sail_of_maps ctx decls }
+
 let sail_of_events ctx (decls: ASL_AST.declaration list) =
   let add_event evs = function
     | Decl_NewEventDefn (id, args, l) ->
@@ -2439,3 +2444,5 @@ let sail_of_events ctx (decls: ASL_AST.declaration list) =
   let evs = List.fold_left add_event ASL_Utils.Bindings.empty decls in
   let sail_of_event (id, (args, stmts)) = sail_fundef_of_decl ctx id unit_ty args stmts in
   List.concat (List.map sail_of_event (ASL_Utils.Bindings.bindings evs))
+
+let ast_of_events ctx decls = { empty_ast with defs = sail_of_events ctx decls }

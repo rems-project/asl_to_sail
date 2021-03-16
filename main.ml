@@ -1,5 +1,6 @@
 open LibASL.Asl_ast
 open Ast_util
+open Ast_defs
 
 module ASL_AST = LibASL.Asl_ast
 module ASL_Utils = LibASL.Asl_utils
@@ -237,7 +238,7 @@ let impdef_decl id =
   let impl = Decl_FunDefn (ty, fun_id, [arg], [body], Unknown) in
   [decl; impl]
 
-type sail_ast = unit Ast.defs
+type sail_ast = unit ast
 
 let header = ref (None : string option)
 
@@ -272,7 +273,7 @@ let write_sail (sail_ast : sail_ast) (filename : string) : unit =
   let (temp_filename, o) = Filename.open_temp_file (Filename.basename filename) "_temp.sail" in
   begin
     output_string o (get_header ());
-    Pretty_print_sail.pp_defs o sail_ast;
+    Pretty_print_sail.pp_ast o sail_ast;
     close_out o;
     Util.move_file temp_filename filename;
   end
@@ -295,7 +296,7 @@ let get_editor =
   try Sys.getenv "EDITOR" with
   | Not_found -> print_endline "EDITOR and VISUAL environment vars unset"; "vim"
 
-exception Asl_type_error of (unit Ast.def) list * Parse_ast.l * string;;
+exception Asl_type_error of unit ast * Parse_ast.l * string;;
 
 module StringSet = Set.Make(String)
 module StringMap = Map.Make(String)
@@ -595,12 +596,12 @@ let report_sail_error (ctx: Translate_asl.ctx) decls sail convert continue =
      print_endline (bold "\nConverting ASL:");
      List.iter print_decl decls;
      print_endline (bold "\nFailed to typecheck the following sail:");
-     Pretty_print_sail.pp_defs stdout (Ast.Defs sail);
+     Pretty_print_sail.pp_ast stdout sail;
      print_endline (bold "\nDerivation:");
      Type_check.opt_tc_debug := 1;
      let _, _ =
-       try Type_error.check ctx.tc_env (Ast.Defs sail) with
-       | Reporting.Fatal_error e -> Ast.Defs [], ctx.tc_env
+       try Type_error.check ctx.tc_env sail with
+       | Reporting.Fatal_error e -> empty_ast, ctx.tc_env
      in
      Type_check.opt_tc_debug := 0;
      print_endline (bold "\nReason:");
@@ -609,7 +610,7 @@ let report_sail_error (ctx: Translate_asl.ctx) decls sail convert continue =
      continue ()
   | Reporting.Fatal_error e ->
      print_endline (bold "Sail fatal error when processing:");
-     Pretty_print_sail.pp_defs stdout (Ast.Defs sail);
+     Pretty_print_sail.pp_ast stdout sail;
      Reporting.print_error e;
      exit 1
 
@@ -672,8 +673,8 @@ let rec interact ctx sail chunk rest =
   | "p" | "patch" ->
      begin
        let is_val = is_val_chunk chunk in
-       write_sail (Ast.Defs sail) (patch_file is_val chunk);
-       write_sail (Ast.Defs sail) (orig_file is_val chunk);
+       write_sail sail (patch_file is_val chunk);
+       write_sail sail (orig_file is_val chunk);
        let cmd = get_editor ^ " " ^ patch_file is_val chunk in
        print_endline ("Executing: " ^ cmd);
        ignore (Sys.command cmd);
@@ -688,7 +689,7 @@ let rec interact ctx sail chunk rest =
 and iterate_check n env sail =
   let open Type_check in
   try
-    let checked_sail, env = check env (Ast.Defs sail) in
+    let checked_sail, env = check env sail in
     checked_sail, sail, env
   with
   | Type_error (env', l, err) when n <= 20 ->
@@ -716,9 +717,9 @@ and iterate_check n env sail =
         let sail = List.fold_left fix_quant sail quants in
         iterate_check (n + 1) env sail
      | None ->
-        if List.exists (is_duplicate_def err) sail then begin
+        if List.exists (is_duplicate_def err) sail.defs then begin
           print_endline "Warning: Duplicate definitions!";
-          let sail' = remove_duplicate_def err sail in
+          let sail' = { sail with defs = remove_duplicate_def err sail.defs } in
           iterate_check (n + 1) env sail'
         end else
           raise (Asl_type_error (sail, l, Type_error.string_of_type_error err))
@@ -726,7 +727,7 @@ and iterate_check n env sail =
   | Type_error (_, l, err) -> raise (Asl_type_error (sail, l, Type_error.string_of_type_error err))
 
 and convert_ast ctx = function
-  | [] -> [], ctx
+  | [] -> empty_ast, ctx
   | (Chunk_vals [] :: rest) | (Chunk_decls [] :: rest) ->
      incr done_chunks;
      convert_ast ctx rest
@@ -741,15 +742,15 @@ and convert_ast ctx = function
        let sail =
          if Sys.file_exists (patch_file is_forward chunk)
          then
-           let sail = List.concat (List.map (Translate_asl.sail_of_declaration ctx) decls) in
+           let sail = concat_ast (List.map (Translate_asl.ast_of_declaration ctx) decls) in
            (* let sail = Sail_to_sail.rewrite_overloaded_top sail in *)
            let sail = Sail_to_sail.rewrite_mutated_parameters sail in
-           write_sail (Ast.Defs sail) (orig_file is_forward chunk);
+           write_sail sail (orig_file is_forward chunk);
 
            try
              let file = patch_file is_forward chunk in
              let _, parsed_ast = Process_file.parse_file file in
-             let (Ast.Defs sail) = Initial_check.process_ast (Parse_ast.Defs [(file, Process_file.preprocess [] parsed_ast)]) in
+             let sail = Initial_check.process_ast (Parse_ast.Defs [(file, Process_file.preprocess [] parsed_ast)]) in
              sail
            with
            | Reporting.Fatal_error e ->
@@ -763,11 +764,11 @@ and convert_ast ctx = function
              let (val_decls, decls) = List.partition is_val_decl decls in
              let file = patch_file true chunk in
              let _, parsed_ast = Process_file.parse_file file in
-             let (Ast.Defs vals) = Initial_check.process_ast (Parse_ast.Defs [(file, Process_file.preprocess [] parsed_ast)]) in
-             let check_vals () = Type_check.check ctx.tc_env (Ast.Defs vals) in
+             let vals = Initial_check.process_ast (Parse_ast.Defs [(file, Process_file.preprocess [] parsed_ast)]) in
+             let check_vals () = Type_check.check ctx.tc_env vals in
              let (_, env) = report_sail_error ctx val_decls vals check_vals (fun _ -> exit 1) in
              let ctx = { ctx with tc_env = env } in
-             let sail = vals @ List.concat (List.map (Translate_asl.sail_of_declaration ctx) decls) in
+             let sail = concat_ast (vals :: (List.map (Translate_asl.ast_of_declaration ctx) decls)) in
              let sail = Sail_to_sail.rewrite_mutated_parameters sail in
              let sail = Sail_to_sail.eventually_constant sail in
              let sail = Sail_to_sail.vector_exps sail in
@@ -783,8 +784,8 @@ and convert_ast ctx = function
               failwith m
          else
            try
-             let sail = List.concat (List.map (Translate_asl.sail_of_declaration ctx) decls) in
-             let _ = if !write_osails then write_sail (Ast.Defs sail) (orig_file is_forward chunk) in
+             let sail = concat_ast (List.map (Translate_asl.ast_of_declaration ctx) decls) in
+             let _ = if !write_osails then write_sail sail (orig_file is_forward chunk) in
              (* let sail = Sail_to_sail.rewrite_overloaded_top sail in *)
              let sail = Sail_to_sail.rewrite_mutated_parameters sail in
              let sail = Sail_to_sail.eventually_constant sail in
@@ -797,35 +798,35 @@ and convert_ast ctx = function
               failwith m
        in
 
-       let sail = if is_forward then List.filter is_valspec sail else sail in
-       let sail = List.filter (fun d -> not (is_duplicate_val_spec ctx d)) sail in
+       let sail = if is_forward then Sail_to_sail.filter_ast is_valspec sail else sail in
+       let sail = Sail_to_sail.filter_ast (fun d -> not (is_duplicate_val_spec ctx d)) sail in
 
        report_sail_error ctx decls sail
          (fun _ ->
             let sail = Sail_to_sail.rewrite_make_unique sail in
-            let (Defs checked_sail), sail, env = iterate_check 0 ctx.tc_env sail in
+            let checked_sail, sail, env = iterate_check 0 ctx.tc_env sail in
 
             (* Add effects *)
             let fun_effs =
-              List.map get_fundef_effs checked_sail
+              List.map get_fundef_effs checked_sail.defs
               |> List.fold_left union_effects no_effect
             in
-            let fun_ids = List.concat (List.map get_fundef_id checked_sail) in
+            let fun_ids = List.concat (List.map get_fundef_id checked_sail.defs) in
             let env = List.fold_left (add_effects fun_effs) env fun_ids in
 
             (* The lexer/parser and initial check have side-effects we
               need for incremental typechecking so we have to write each
               top to a separate file and call the parser and throw away
               the result. Yes seriously... *)
-            if sail = [] then ()
+            if sail.defs = [] then ()
             else begin
-              write_sail (Ast.Defs sail) (sail_filename "temp");
+              write_sail sail (sail_filename "temp");
               ignore (Process_file.parse_file (sail_filename "temp"))
             end;
 
             let ctx = { ctx with tc_env = env } in
             let sail', ctx = convert_ast ctx rest in
-            sail @ sail', ctx)
+            append_ast sail sail', ctx)
          (fun _ ->
             if !interactive
             then interact ctx sail chunk rest
@@ -863,10 +864,10 @@ let process_asl_file ((ctx : Translate_asl.ctx), maps, events, clauses, previous
 
   (* Declare operators *)
   let op_decls' =
-    List.map (Translate_asl.sail_of_declaration ctx) op_decls
-    |> List.concat
+    List.map (Translate_asl.ast_of_declaration ctx) op_decls
+    |> concat_ast
   in
-  let (_, env) = Type_check.check ctx.tc_env (Defs op_decls') in
+  let (_, env) = Type_check.check ctx.tc_env op_decls' in
   let ctx = { ctx with tc_env = env } in
 
   (* Extract constraint assertions from function bodys *)
@@ -876,32 +877,32 @@ let process_asl_file ((ctx : Translate_asl.ctx), maps, events, clauses, previous
   done_chunks := 0;
   num_chunks := List.length chunks;
   let (decls', ctx) = convert_ast ctx chunks in
-  let decls' = List.map (update_effects ctx.tc_env) decls' in
+  let decls' = Sail_to_sail.map_ast (update_effects ctx.tc_env) decls' in
 
   (* Write result *)
-  write_sail (Defs (op_decls' @ decls')) (sail_filename (asl_basename filename));
+  write_sail (append_ast op_decls' decls') (sail_filename (asl_basename filename));
 
   let chunk_map = List.fold_left (fun m c -> StringMap.add (name_of_chunk c) c m) StringMap.empty chunks in
   let previous_chunks' = StringMap.union (fun _ c1 c2 -> Some (merge_chunks c1 c2)) previous_chunks chunk_map in
   (ctx, maps @ maps', events @ events', clauses @ clauses', previous_chunks')
 
 let process_map_clauses (ctx : Translate_asl.ctx) decls =
-  let sail = Translate_asl.sail_of_maps ctx decls in
-  report_sail_error ctx decls sail
+  let ast = Translate_asl.ast_of_maps ctx decls in
+  report_sail_error ctx decls ast
     (fun _ ->
-       let sail = Sail_to_sail.rewrite_make_unique sail in
-       let (_, sail, env) = iterate_check 0 ctx.tc_env sail in
-       write_sail (Defs sail) (sail_filename "map_clauses");
+       let ast = Sail_to_sail.rewrite_make_unique ast in
+       let (_, ast, env) = iterate_check 0 ctx.tc_env ast in
+       write_sail ast (sail_filename "map_clauses");
        { ctx with tc_env = env })
     (fun _ -> exit 1)
 
 let process_event_clauses (ctx : Translate_asl.ctx) decls =
-  let sail = Translate_asl.sail_of_events ctx decls in
-  report_sail_error ctx decls sail
+  let ast = Translate_asl.ast_of_events ctx decls in
+  report_sail_error ctx decls ast
     (fun _ ->
-       let sail = Sail_to_sail.rewrite_make_unique sail in
-       let (_, sail, env) = iterate_check 0 ctx.tc_env sail in
-       write_sail (Defs sail) (sail_filename "event_clauses");
+       let ast = Sail_to_sail.rewrite_make_unique ast in
+       let (_, ast, env) = iterate_check 0 ctx.tc_env ast in
+       write_sail ast (sail_filename "event_clauses");
        { ctx with tc_env = env })
     (fun _ -> exit 1)
 
