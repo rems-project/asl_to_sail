@@ -14,7 +14,7 @@ let __WriteMemory n addr data = write_mem Write_plain (56:integer) addr n data >
 val putchar : integer -> unit
 let putchar _ = ()
 
-val undefined_bitvector : forall 'rv 'n 'e. Size 'n => integer -> monad 'rv (mword 'n) 'e
+val undefined_bitvector : forall 'rv 'n 'e. Size 'n, Register_Value 'rv => integer -> monad 'rv (mword 'n) 'e
 let undefined_bitvector n = of_bits_nondet (repeat [BU] n)
 
 let undefined_unit () = return ()
@@ -22,26 +22,20 @@ val undefined_vector : forall 'rv 'a 'e. integer -> 'a -> monad 'rv (list 'a) 'e
 let undefined_vector len u = return (repeat [u] len)
 let undefined_bits = undefined_bitvector
 let undefined_bit () = return BU
-let undefined_string () = return ""
-val undefined_int : forall 'rv 'e. unit -> monad 'rv integer 'e
-let undefined_int () =
-  (* Choose an integer between -2^64 and 2^64 *)
-  undefined_bitvector 64 >>= (fun (w : mword ty64) ->
-  undefined_bool () >>= (fun (positive : bool) ->
-  let i = uint w in
-  return (if positive then i else integerNegate i)))
+let undefined_bool () = choose_bool "undefined_bool"
+let undefined_string () = choose_string "undefined_string"
+let undefined_int () = choose_int "undefined_int"
 let undefined_nat () =
   undefined_int () >>= (fun i ->
   return (abs i))
-let undefined_real () =
-  undefined_int () >>= (fun x ->
-  undefined_nat () >>= (fun y ->
-  return (realFromFrac x (y + 1))))
+let undefined_real () = choose_real "undefined_real"
 let undefined_range i j =
   if i = j then return i else
   undefined_nat () >>= (fun n ->
   return (i + (n mod (j - i + 1))))
 let undefined_atom i = return i
+
+let internal_pick xs = choose_from_list "internal_pick" xs
 
 type ty288
 instance (Size ty288) let size = 288 end
