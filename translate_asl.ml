@@ -8,6 +8,8 @@ module ASL_PP    = LibASL.Asl_parser_pp
 module ASL_TC    = LibASL.Tcheck
 module ASL_Utils = LibASL.Asl_utils
 
+let opt_see_checks = ref true
+
 type lvar =
   | Owned of mut * typ
   | Shared of mut * typ
@@ -2023,9 +2025,9 @@ let sail_decoder_clause ctx = function
           Some (List.fold_left subst_field exp getters)
      in
      decoder_num := Big_int.succ !decoder_num;
-     let see_check = mk_exp (E_app_infix (mk_exp (E_id (mk_id "SEE")), mk_id "<", mk_lit_exp (L_num !decoder_num))) in
-     let see_update = mk_exp (E_assign (mk_lexp (LEXP_id (mk_id "SEE")), mk_lit_exp (L_num !decoder_num))) in
-     let clause_guard = and_bool_opt (and_bool_opt guard' pguard) (Some see_check) in
+     let see_check = if !opt_see_checks then Some (mk_exp (E_app_infix (mk_exp (E_id (mk_id "SEE")), mk_id "<", mk_lit_exp (L_num !decoder_num)))) else None in
+     let see_update = if !opt_see_checks then [mk_exp (E_assign (mk_lexp (LEXP_id (mk_id "SEE")), mk_lit_exp (L_num !decoder_num)))] else [] in
+     let clause_guard = and_bool_opt (and_bool_opt guard' pguard) see_check in
      let decode_id = add_name_prefix "decode" id in
      let decode_args = List.map (fun (IField_Field (id, _, _)) -> Expr_Var id) fields in
      let decode_call = Stmt_TCall (decode_id, [], decode_args, Unknown) in
@@ -2045,7 +2047,7 @@ let sail_decoder_clause ctx = function
      let bind_field (id, getter) exp =
        mk_exp (E_let (mk_letbind (mk_pat (P_id id)) getter, mk_exp (E_block [exp])))
      in
-     let body = mk_exp (E_block [see_update; List.fold_right bind_field getters decode_stmt']) in
+     let body = mk_exp (E_block (see_update @ [List.fold_right bind_field getters decode_stmt'])) in
      let clause_pat = mk_pat (P_tup [mk_pat (P_id (mk_id "pc")); mk_pat (P_as (pat, mk_id "opcode"))]) in
      let pexp = construct_pexp (clause_pat, clause_guard) body in
      let decoder_id = mk_id ("__Decode" ^ pprint_ident arch) in
@@ -2058,7 +2060,11 @@ let sail_of_encoding ctx opost exec_id vl_exprs exec_args conditional encoding =
      let decode_id = add_name_prefix "decode" id in
      let args = List.map arg_of_ifield fields in
      let post = Util.option_default [] opost in
-     let decode_body = stmts @ post in
+     let guard_assert = match guard with
+       | Expr_Var id when pprint_ident id = "TRUE" -> []
+       | _ -> [Stmt_Assert (guard, l)]
+     in
+     let decode_body = guard_assert @ stmts @ post in
      let arg_missing (_, v) =
        not (Bindings.mem v (locals_of_stmts decode_body))
        && not (List.exists (fun (_, v') -> Id.compare v v' = 0) args)
