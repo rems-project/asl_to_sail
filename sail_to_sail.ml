@@ -1,4 +1,5 @@
 open Ast
+open Ast_defs
 open Ast_util
 open Type_check
 
@@ -295,13 +296,16 @@ let map_funcl f (FCL_aux (FCL_Funcl (id, pexp), annot)) =
 let map_funcl_exps f id pat guard exp =
   (id, pat, Util.option_map f guard, f exp)
 
-let map_fundef f (FD_aux (FD_function (r_opt, t_opt, e_opt, funcls), annot)) =
-  FD_aux (FD_function (r_opt, t_opt, e_opt, List.map (map_funcl f) funcls), annot)
+let map_fundef f = function
+  | DEF_fundef (FD_aux (FD_function (r_opt, t_opt, e_opt, funcls), annot)) ->
+     DEF_fundef (FD_aux (FD_function (r_opt, t_opt, e_opt, List.map (map_funcl f) funcls), annot))
+  | def -> def
 
-let rec map_fundefs f = function
-  | (DEF_fundef fdef :: defs) -> DEF_fundef (map_fundef f fdef) :: map_fundefs f defs
-  | def :: defs -> def :: map_fundefs f defs
-  | [] -> []
+let map_ast f ast = { ast with defs = List.map f ast.defs }
+
+let map_fundefs f ast = map_ast (map_fundef f) ast
+
+let filter_ast f ast = { ast with defs = List.filter f ast.defs }
 
 let iter_fundefs f =
   map_fundefs (fun id pat guard exp -> f id pat guard exp; (id, pat, guard, exp))
@@ -407,10 +411,11 @@ let rewrite_mutated_parameters =
    funcl bodies regarding these arguments, e.g. that 'datasize is
    some small power of two *)
 
-let rec map_valspecs f = function
-  | (DEF_spec vs :: defs) -> DEF_spec (f vs) :: map_valspecs f defs
-  | def :: defs -> def :: map_valspecs f defs
-  | [] -> []
+let map_valspec f = function
+  | DEF_spec vs -> DEF_spec (f vs)
+  | def -> def
+
+let map_valspecs f = map_ast (map_valspec f)
 
 let map_valspec_typschm f (VS_aux (VS_val_spec (typschm, id, ext, is_cast), l)) =
   VS_aux (VS_val_spec (f id typschm, id, ext, is_cast), l)
@@ -729,18 +734,18 @@ let insert_into_block n insertion defs =
 
 exception Not_top_level of n_constraint;;
 
-let rewrite_add_constraint l env nc local_ncs defs =
+let rewrite_add_constraint l env nc local_ncs ast =
   (* prerr_endline "Calling rewrite_add_constraint"; *)
   match l with
   | Parse_ast.Unique (n, l) ->
      let insert_into_funbody nc =
        let assertion = mk_exp (E_assert (mk_exp (E_constraint nc), mk_lit_exp (L_string ""))) in
-       insert_into_block n assertion defs;
+       insert_into_block n assertion ast;
      in
      (* We need to add a constraint for a location, so we start by
         finding the function containing that location. *)
      let function_id = ref None in
-     ignore (map_fundefs (fun id pat guard exp -> if is_unique_in_exp n exp then function_id := Some id else (); (id, pat, guard, exp)) defs);
+     ignore (map_fundefs (fun id pat guard exp -> if is_unique_in_exp n exp then function_id := Some id else (); (id, pat, guard, exp)) ast);
 
      begin match !function_id with
      | Some id ->
@@ -780,8 +785,8 @@ let rewrite_add_constraint l env nc local_ncs defs =
               | DEF_spec vs -> Id.compare (id_of_val_spec vs) id = 0
               | _ -> false
             in
-            if List.exists is_spec_of_id defs then
-              map_valspecs (map_valspec_typschm add_constraint) defs
+            if List.exists is_spec_of_id ast.defs then
+              map_valspecs (map_valspec_typschm add_constraint) ast
             else
               insert_into_funbody nc
           with
