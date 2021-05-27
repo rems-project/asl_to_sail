@@ -2008,13 +2008,17 @@ let sail_decoder_clause ctx = function
        | Opcode_Bits b -> sail_of_pat ctx (Pat_LitBits b)
        | Opcode_Mask m -> sail_of_pat ctx (Pat_LitMask m)
      in
+     let opcode_name = "__opcode" in
      (* TODO: Check for fields that are constant in the opcode and propagate those constants? *)
      let getter = function
        | IField_Field (id, start, len) ->
           let start' = mk_lit_exp (L_num (Big_int.of_int start)) in
           let len' = mk_lit_exp (L_num (Big_int.of_int len)) in
-          let opcode' = mk_exp (E_id (mk_id "opcode")) in
-          (sail_id_of_ident id, mk_exp (E_app (mk_id "Slice", [opcode'; start'; len'])))
+          let opcode' = mk_exp (E_id (mk_id opcode_name)) in
+          let sail_id = sail_id_of_ident id in
+          if Ast_util.Id.compare sail_id (mk_id opcode_name) = 0
+          then failwith ("Instruction " ^ name_of_ident id ^ " has an encoding with a field named __opcode")
+          else (sail_id, mk_exp (E_app (mk_id "Slice", [opcode'; start'; len'])))
      in
      let getters = List.map getter fields in
      let guard' = match sail_of_expr ctx guard with
@@ -2032,7 +2036,7 @@ let sail_decoder_clause ctx = function
      let decode_call = Stmt_TCall (decode_id, [], decode_args, Unknown) in
      let unpred_check (idx, value) =
        let idx' = Expr_LitInt (string_of_int idx) in
-       let bit = Expr_Slices (Expr_Var (Ident "opcode"), [Slice_Single idx']) in
+       let bit = Expr_Slices (Expr_Var (Ident opcode_name), [Slice_Single idx']) in
        Expr_Binop (bit, Binop_NtEq, Expr_LitBits value)
      in
      let decode_stmt = match List.map unpred_check unpreds with
@@ -2047,7 +2051,7 @@ let sail_decoder_clause ctx = function
        mk_exp (E_let (mk_letbind (mk_pat (P_id id)) getter, mk_exp (E_block [exp])))
      in
      let body = mk_exp (E_block [see_update; List.fold_right bind_field getters decode_stmt']) in
-     let clause_pat = mk_pat (P_tup [mk_pat (P_id (mk_id "pc")); mk_pat (P_as (pat, mk_id "opcode"))]) in
+     let clause_pat = mk_pat (P_tup [mk_pat (P_id (mk_id "pc")); mk_pat (P_as (pat, mk_id opcode_name))]) in
      let pexp = construct_pexp (clause_pat, clause_guard) body in
      let decoder_id = mk_id ("__Decode" ^ pprint_ident arch) in
      let sdfuncl = SD_funcl (FCL_aux (FCL_Funcl (decoder_id, pexp), no_annot)) in
