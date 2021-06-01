@@ -204,8 +204,8 @@ enum signal = LOW | HIGH
 infix 7 >>
 infix 7 <<
 
-overload operator << = {sail_shiftleft, _shl1, _shl8, _shl32, _shl_int}
-overload operator >> = {sail_shiftright, _shr32, _shr_int}
+overload operator << = {sail_shiftleft, _shl1, _shl8, _shl32, _shl_int, _shl_int_general}
+overload operator >> = {sail_shiftright, _shr32, _shr_int, _shr_int_general}
 
 union exception = {
   Error_Undefined : unit,
