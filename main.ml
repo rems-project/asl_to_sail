@@ -65,6 +65,9 @@ let options = Arg.align ([
   ( "-mono_splits_file",
     Arg.String (fun f -> Translate_asl.read_mono_splits_file f),
     " read additional monomorphisation splits from file");
+  ( "-no_see_checks",
+    Arg.Clear Translate_asl.opt_see_checks,
+    " omit SEE checks and updates in decoder");
 ])
 
 let ident_loc_of_decl (decl : declaration) : (ident * l) =
