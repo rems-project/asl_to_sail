@@ -476,11 +476,15 @@ let is_keyword =
   let vector_rexpr = Str.regexp_string "vector" in
   let option_rexpr = Str.regexp_string "option" in
   let inc_rexpr = Str.regexp_string "inc" in
+  let constraint_rexpr = Str.regexp_string "constraint" in
+  let end_rexpr = Str.regexp_string "end" in
   function s ->
     Str.string_match val_rexpr s 0 ||
     Str.string_match vector_rexpr s 0 ||
     Str.string_match option_rexpr s 0 ||
-    Str.string_match inc_rexpr s 0
+    Str.string_match inc_rexpr s 0 ||
+    Str.string_match constraint_rexpr s 0 ||
+    Str.string_match end_rexpr s 0
 
 let str_replace s with_ in_ = Str.global_replace (Str.regexp s) with_ in_
 let str_remove s in_ = Str.global_replace (Str.regexp s) "" in_
