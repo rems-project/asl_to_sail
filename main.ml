@@ -22,6 +22,8 @@ let patch_dir = ref "patches"
 let write_osails = ref false
 let interactive = ref true
 let overrides = ref ([] : (string * string) list)
+let slice_roots = ref ([] : string list)
+let slice_cuts = ref ([] : string list)
 
 let read_overrides_file filename =
   let file = open_in filename in
@@ -68,6 +70,12 @@ let options = Arg.align ([
   ( "-no_see_checks",
     Arg.Clear Translate_asl.opt_see_checks,
     " omit SEE checks and updates in decoder");
+  ( "-slice_roots",
+    Arg.String (fun l -> slice_roots := !slice_roots @ (String.split_on_char ',' l)),
+    " slice specification to given (comma-separated list of) functions and their dependencies");
+  ( "-slice_cuts",
+    Arg.String (fun l -> slice_cuts := !slice_cuts @ (String.split_on_char ',' l)),
+    " remove given (comma-separated list of) functions when slicing");
 ])
 
 let ident_loc_of_decl (decl : declaration) : (ident * l) =
@@ -133,6 +141,7 @@ let is_val_decl = function
   | _ -> false
 
 let is_fun_decl = function
+  | Decl_BuiltinFunction _
   | Decl_FunDefn _
   | Decl_ProcDefn _
   | Decl_VarGetterDefn _
@@ -730,7 +739,7 @@ and iterate_check n env sail =
   | Type_error (_, l, err) -> raise (Asl_type_error (sail, l, Type_error.string_of_type_error err))
 
 and convert_ast ctx = function
-  | [] -> empty_ast, ctx
+  | [] -> empty_ast, empty_ast, ctx
   | (Chunk_vals [] :: rest) | (Chunk_decls [] :: rest) ->
      incr done_chunks;
      convert_ast ctx rest
@@ -828,17 +837,29 @@ and convert_ast ctx = function
             end;
 
             let ctx = { ctx with tc_env = env } in
-            let sail', ctx = convert_ast ctx rest in
-            append_ast sail sail', ctx)
+            let (checked_sail', sail', ctx) = convert_ast ctx rest in
+            (append_ast checked_sail checked_sail', append_ast sail sail', ctx))
          (fun _ ->
             if !interactive
             then interact ctx sail chunk rest
             else exit 1)
      end
 
+type processed_file =
+  | ASL_File of string * LibASL.Asl_ast.declaration list * Type_check.tannot Ast_defs.ast * unit Ast_defs.ast
+  | Sail_File of string * Type_check.tannot Ast_defs.ast
+
+let write_processed_file = function
+  | ASL_File (filename, _, _, ast) ->
+     write_sail ast (sail_filename (asl_basename filename));
+  | Sail_File _ -> ()
+
+let sail_ast_of_processed_file = function
+  | ASL_File (_, _, ast, _) | Sail_File (_, ast) -> ast
+
 let load_asl is_prelude filename = LibASL.LoadASL.read_file filename is_prelude false
 
-let process_asl_file ((ctx : Translate_asl.ctx), maps, events, clauses, previous_chunks) filename =
+let process_asl_file ((ctx : Translate_asl.ctx), maps, events, clauses, previous_chunks, previous_files) filename =
   let decls = time ("Read ASL file " ^ filename) (load_asl false) filename in
 
   let impdef_decls =
@@ -866,11 +887,11 @@ let process_asl_file ((ctx : Translate_asl.ctx), maps, events, clauses, previous
   let chunks = get_chunks ~previous_chunks:previous_chunks (maps' @ events' @ decls @ impdef_decls) in
 
   (* Declare operators *)
-  let op_decls' =
+  let op_ast =
     List.map (Translate_asl.ast_of_declaration ctx) op_decls
     |> concat_ast
   in
-  let (_, env) = Type_check.check ctx.tc_env op_decls' in
+  let (checked_op_ast, env) = Type_check.check ctx.tc_env op_ast in
   let ctx = { ctx with tc_env = env } in
 
   (* Extract constraint assertions from function bodys *)
@@ -879,24 +900,21 @@ let process_asl_file ((ctx : Translate_asl.ctx), maps, events, clauses, previous
   (* Translate declarations *)
   done_chunks := 0;
   num_chunks := List.length chunks;
-  let (decls', ctx) = convert_ast ctx chunks in
-  let decls' = Sail_to_sail.map_ast (update_effects ctx.tc_env) decls' in
-
-  (* Write result *)
-  write_sail (append_ast op_decls' decls') (sail_filename (asl_basename filename));
+  let (checked_ast, ast, ctx) = convert_ast ctx chunks in
+  let ast = Sail_to_sail.map_ast (update_effects ctx.tc_env) ast in
 
   let chunk_map = List.fold_left (fun m c -> StringMap.add (name_of_chunk c) c m) StringMap.empty chunks in
   let previous_chunks' = StringMap.union (fun _ c1 c2 -> Some (merge_chunks c1 c2)) previous_chunks chunk_map in
-  (ctx, maps @ maps', events @ events', clauses @ clauses', previous_chunks')
+  let previous_files' = previous_files @ [ASL_File (filename, decls, append_ast checked_op_ast checked_ast, append_ast op_ast ast)] in
+  (ctx, maps @ maps', events @ events', clauses @ clauses', previous_chunks', previous_files')
 
 let process_map_clauses (ctx : Translate_asl.ctx) decls =
   let ast = Translate_asl.ast_of_maps ctx decls in
   report_sail_error ctx decls ast
     (fun _ ->
        let ast = Sail_to_sail.rewrite_make_unique ast in
-       let (_, ast, env) = iterate_check 0 ctx.tc_env ast in
-       write_sail ast (sail_filename "map_clauses");
-       { ctx with tc_env = env })
+       let (checked_ast, ast, env) = iterate_check 0 ctx.tc_env ast in
+       ASL_File ("map_clauses.asl", decls, checked_ast, ast))
     (fun _ -> exit 1)
 
 let process_event_clauses (ctx : Translate_asl.ctx) decls =
@@ -904,23 +922,43 @@ let process_event_clauses (ctx : Translate_asl.ctx) decls =
   report_sail_error ctx decls ast
     (fun _ ->
        let ast = Sail_to_sail.rewrite_make_unique ast in
-       let (_, ast, env) = iterate_check 0 ctx.tc_env ast in
-       write_sail ast (sail_filename "event_clauses");
-       { ctx with tc_env = env })
+       let (checked_ast, ast, env) = iterate_check 0 ctx.tc_env ast in
+       ASL_File ("event_clauses.asl", decls, checked_ast, ast))
     (fun _ -> exit 1)
 
-let process_sail_file ((ctx : Translate_asl.ctx), maps, events, clauses, previous_chunks) filename =
+let process_sail_file ((ctx : Translate_asl.ctx), maps, events, clauses, previous_chunks, previous_files) filename =
   print_endline ("Reading Sail file " ^ filename);
-  let (_, _, env) =
+  let (_, ast, env) =
     try Process_file.load_files [] ctx.tc_env [filename] with
     | Reporting.Fatal_error e -> Reporting.print_error e; exit 1
   in
-  ({ ctx with tc_env = env }, maps, events, clauses, previous_chunks)
+  let previous_files' = previous_files @ [Sail_File (filename, ast)] in
+  ({ ctx with tc_env = env }, maps, events, clauses, previous_chunks, previous_files')
 
 let process_file ctx filename =
   if is_asl_filename filename then process_asl_file ctx filename
   else if is_sail_filename filename then process_sail_file ctx filename
   else failwith ("Unrecognised file extension: " ^ filename)
+
+let slice_processed_files fs =
+  if !slice_roots = [] then fs else begin
+    (* Build dependency graph of full specification *)
+    let combined_ast = List.map sail_ast_of_processed_file fs |> List.fold_left append_ast Ast_defs.empty_ast |> Scattered.descatter in
+    let module NodeSet = Set.Make(Slice.Node) in
+    let module G = Graph.Make(Slice.Node) in
+    let g = Slice.graph_of_ast combined_ast in
+    (* Slice graph *)
+    let roots = !slice_roots |> List.map (fun id -> Slice.Function (mk_id id)) |> NodeSet.of_list in
+    let cuts = !slice_cuts |> List.map (fun id -> Slice.Function (mk_id id)) |> NodeSet.of_list in
+    let g = G.prune roots cuts g in
+    (* Apply pruning to Sail files translated from ASL *)
+    let filter_processed_file = function
+      | ASL_File (filename, decls, checked_ast, ast) ->
+         ASL_File (filename, decls, checked_ast, Slice.filter_ast cuts g ast)
+      | f -> f
+    in
+    List.map filter_processed_file fs
+  end
 
 let main () : unit =
   begin
@@ -939,15 +977,18 @@ let main () : unit =
     (* Type_check.opt_new_bitfields := true; *)
 
     (* Load the Sail prelude for ARM *)
-    let ctx = process_sail_file (ctx, [], [], [], StringMap.empty) (sail_filename "prelude") in
+    let ctx = process_sail_file (ctx, [], [], [], StringMap.empty, []) (sail_filename "prelude") in
 
     (* Load the ASL prelude *)
     let _  = LibASL.LoadASL.read_file "prelude.asl" true false in
 
     (* Translate files *)
-    let (ctx, maps, events, clauses, _) = List.fold_left process_file ctx !input_files in
-    ignore (process_map_clauses ctx (maps @ clauses));
-    ignore (process_event_clauses ctx (events @ clauses));
+    let (ctx, maps, events, clauses, _, processed_files) = List.fold_left process_file ctx !input_files in
+    let processed_files =
+      processed_files @ [process_map_clauses ctx (maps @ clauses); process_event_clauses ctx (events @ clauses)]
+      |> slice_processed_files
+    in
+    List.iter write_processed_file processed_files;
 
     Constraint.save_digests ();
   end
