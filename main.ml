@@ -21,9 +21,11 @@ let output_dir = ref (None : string option)
 let patch_dir = ref "patches"
 let write_osails = ref false
 let interactive = ref true
+let quiet = ref false
 let overrides = ref ([] : (string * string) list)
 let slice_roots = ref ([] : string list)
 let slice_cuts = ref ([] : string list)
+let gen_stubs = ref false
 
 let read_overrides_file filename =
   let file = open_in filename in
@@ -58,6 +60,9 @@ let options = Arg.align ([
   ( "-non_interactive",
     Arg.Clear interactive,
     " run in non interactive mode");
+  ( "-quiet",
+    Arg.Set quiet,
+    " suppress progress output");
   ( "-mono_vl",
     Arg.Set Translate_asl.mono_vl,
     " enable monomorphisation of VL in decode clauses");
@@ -76,6 +81,9 @@ let options = Arg.align ([
   ( "-slice_cuts",
     Arg.String (fun l -> slice_cuts := !slice_cuts @ (String.split_on_char ',' l)),
     " remove given (comma-separated list of) functions when slicing");
+  ( "-gen_stubs",
+    Arg.Set gen_stubs,
+    " generate stubs for missing functions and output to stubs.sail");
 ])
 
 let ident_loc_of_decl (decl : declaration) : (ident * l) =
@@ -675,13 +683,13 @@ let sail_filename base = match !output_dir with
      let base = Filename.basename base in
      Filename.concat dir (base ^ ".sail")
 
-let rec interact ctx sail chunk rest =
+let rec interact ?use_patches:(use_patches=true) ctx sail chunk rest =
   print_endline (green "\nWhat do you want to do?");
   print_endline ("(p) patch, (x) exit, (s) skip:");
 
   match input_line stdin with
   | "x" | "exit" -> Constraint.save_digests (); exit 1
-  | "s" | "skip" -> convert_ast ctx rest
+  | "s" | "skip" -> convert_ast ~use_patches ctx rest
   | "p" | "patch" ->
      begin
        let is_val = is_val_chunk chunk in
@@ -690,12 +698,12 @@ let rec interact ctx sail chunk rest =
        let cmd = get_editor ^ " " ^ patch_file is_val chunk in
        print_endline ("Executing: " ^ cmd);
        ignore (Sys.command cmd);
-       convert_ast ctx (chunk :: rest)
+       convert_ast ~use_patches ctx (chunk :: rest)
      end
   | str ->
      begin
        print_endline ("Unrecognised command: " ^ str);
-       interact ctx sail chunk rest
+       interact ~use_patches ctx sail chunk rest
      end
 
 and iterate_check n env sail =
@@ -738,21 +746,21 @@ and iterate_check n env sail =
      end
   | Type_error (_, l, err) -> raise (Asl_type_error (sail, l, Type_error.string_of_type_error err))
 
-and convert_ast ctx = function
+and convert_ast ?use_patches:(use_patches=true) ctx = function
   | [] -> empty_ast, empty_ast, ctx
   | (Chunk_vals [] :: rest) | (Chunk_decls [] :: rest) ->
      incr done_chunks;
-     convert_ast ctx rest
+     convert_ast ~use_patches ctx rest
   | (chunk :: rest) ->
      begin
        let (is_forward, decls) = (is_val_chunk chunk, chunk_decls chunk) in
 
        incr done_chunks;
        if is_forward then print_string (green "F ") else ();
-       print_endline (emph "Processing top" ^ " (" ^ string_of_int !done_chunks ^ "/" ^ string_of_int !num_chunks ^ "): " ^ name_of_chunk chunk);
+       if not !quiet then print_endline (emph "Processing top" ^ " (" ^ string_of_int !done_chunks ^ "/" ^ string_of_int !num_chunks ^ "): " ^ name_of_chunk chunk);
 
        let sail =
-         if Sys.file_exists (patch_file is_forward chunk)
+         if use_patches && Sys.file_exists (patch_file is_forward chunk)
          then
            let sail = concat_ast (List.map (Translate_asl.ast_of_declaration ctx) decls) in
            (* let sail = Sail_to_sail.rewrite_overloaded_top sail in *)
@@ -769,7 +777,7 @@ and convert_ast ctx = function
               print_endline (bold "\nFailed to parse patch file: " ^ patch_file is_forward chunk);
               Reporting.print_error e;
               exit 1
-         else if Sys.file_exists (patch_file true chunk)
+         else if use_patches && Sys.file_exists (patch_file true chunk)
          then
            (* Try loading val-specs from the patch file, but translate the remaining decls from ASL *)
            try
@@ -837,11 +845,11 @@ and convert_ast ctx = function
             end;
 
             let ctx = { ctx with tc_env = env } in
-            let (checked_sail', sail', ctx) = convert_ast ctx rest in
+            let (checked_sail', sail', ctx) = convert_ast ~use_patches ctx rest in
             (append_ast checked_sail checked_sail', append_ast sail sail', ctx))
          (fun _ ->
             if !interactive
-            then interact ctx sail chunk rest
+            then interact ~use_patches ctx sail chunk rest
             else exit 1)
      end
 
@@ -855,12 +863,17 @@ let write_processed_file = function
   | Sail_File _ -> ()
 
 let sail_ast_of_processed_file = function
-  | ASL_File (_, _, ast, _) | Sail_File (_, ast) -> ast
+  | ASL_File (_, _, ast, _)
+  | Sail_File (_, ast) -> ast
+
+let asl_decls_of_processed_file = function
+  | ASL_File (_, decls, _, _) -> decls
+  | _ -> []
 
 let load_asl is_prelude filename = LibASL.LoadASL.read_file filename is_prelude false
 
 let process_asl_file ((ctx : Translate_asl.ctx), maps, events, clauses, previous_chunks, previous_files) filename =
-  let decls = time ("Read ASL file " ^ filename) (load_asl false) filename in
+  let decls = if !quiet then load_asl false filename else time ("Read ASL file " ^ filename) (load_asl false) filename in
 
   let impdef_decls =
     ASL_Utils.IdentSet.elements (impdef_types_of_decls decls)
@@ -927,7 +940,7 @@ let process_event_clauses (ctx : Translate_asl.ctx) decls =
     (fun _ -> exit 1)
 
 let process_sail_file ((ctx : Translate_asl.ctx), maps, events, clauses, previous_chunks, previous_files) filename =
-  print_endline ("Reading Sail file " ^ filename);
+  if not !quiet then print_endline ("Reading Sail file " ^ filename);
   let (_, ast, env) =
     try Process_file.load_files [] ctx.tc_env [filename] with
     | Reporting.Fatal_error e -> Reporting.print_error e; exit 1
@@ -942,6 +955,7 @@ let process_file ctx filename =
 
 let slice_processed_files fs =
   if !slice_roots = [] then fs else begin
+    if not !quiet then print_endline "Slicing specification";
     (* Build dependency graph of full specification *)
     let combined_ast = List.map sail_ast_of_processed_file fs |> List.fold_left append_ast Ast_defs.empty_ast |> Scattered.descatter in
     let module NodeSet = Set.Make(Slice.Node) in
@@ -954,11 +968,44 @@ let slice_processed_files fs =
     (* Apply pruning to Sail files translated from ASL *)
     let filter_processed_file = function
       | ASL_File (filename, decls, checked_ast, ast) ->
-         ASL_File (filename, decls, checked_ast, Slice.filter_ast cuts g ast)
+         ASL_File (filename, decls, Slice.filter_ast cuts g checked_ast, Slice.filter_ast cuts g ast)
       | f -> f
     in
     List.map filter_processed_file fs
   end
+
+let generate_stubs ctx processed_files =
+  (* Determine declared but not defined functions *)
+  if not !quiet then print_endline "Generating stubs for missing functions";
+  let decls = List.concat (List.map asl_decls_of_processed_file processed_files) in
+  let ast = List.map sail_ast_of_processed_file processed_files |> List.fold_left append_ast Ast_defs.empty_ast |> Scattered.descatter in
+  let defined_sail_funs = List.map get_fundef_id ast.defs |> List.concat |> IdSet.of_list in
+  let is_undefined id =
+    let id' = Translate_asl.sail_id_of_ident id in
+    not (IdSet.mem id' defined_sail_funs) && IdSet.mem id' (val_spec_ids ast.defs)
+  in
+  let add_stub stubs = function
+    | Decl_FunType (ty, id, args, l) when is_undefined id ->
+       ASL_Utils.Bindings.add id (Decl_FunDefn (ty, id, args, [Stmt_FunReturn (Expr_Unknown ty, l)], l)) stubs
+    | Decl_ProcType (id, args, l) when is_undefined id ->
+       ASL_Utils.Bindings.add id (Decl_ProcDefn (id, args, [Stmt_ProcReturn l], l)) stubs
+    | Decl_VarGetterType (ty, id, l) when is_undefined id ->
+       ASL_Utils.Bindings.add id (Decl_VarGetterDefn (ty, id, [Stmt_FunReturn (Expr_Unknown ty, l)], l)) stubs
+    | Decl_ArrayGetterType (ty, id, args, l) when is_undefined id ->
+       ASL_Utils.Bindings.add id (Decl_ArrayGetterDefn (ty, id, args, [Stmt_FunReturn (Expr_Unknown ty, l)], l)) stubs
+    | Decl_VarSetterType (id, ty, arg, l) when is_undefined id ->
+       ASL_Utils.Bindings.add id (Decl_VarSetterDefn (id, ty, arg, [Stmt_ProcReturn l], l)) stubs
+    | Decl_ArraySetterType (id, args, ty, var, l) when is_undefined id ->
+       ASL_Utils.Bindings.add id (Decl_ArraySetterDefn (id, args, ty, var, [Stmt_ProcReturn l], l)) stubs
+    | _ -> stubs
+  in
+  let stubs = List.fold_left add_stub ASL_Utils.Bindings.empty decls |> ASL_Utils.Bindings.bindings |> List.map snd in
+  let chunks = List.map (fun decl -> Chunk_decls [decl]) stubs in
+  let quiet_orig = !quiet in
+  quiet := true;
+  let (checked_ast, ast, ctx) = convert_ast ~use_patches:false ctx chunks in
+  quiet := quiet_orig;
+  ASL_File ("stubs.asl", stubs, checked_ast, ast)
 
 let main () : unit =
   begin
@@ -985,9 +1032,12 @@ let main () : unit =
     (* Translate files *)
     let (ctx, maps, events, clauses, _, processed_files) = List.fold_left process_file ctx !input_files in
     let processed_files =
-      processed_files @ [process_map_clauses ctx (maps @ clauses); process_event_clauses ctx (events @ clauses)]
+      processed_files
+      @ [process_map_clauses ctx (maps @ clauses); process_event_clauses ctx (events @ clauses)]
+      @ (if !gen_stubs then [generate_stubs ctx processed_files] else [])
       |> slice_processed_files
     in
+    if not !quiet then print_endline "Writing generated files";
     List.iter write_processed_file processed_files;
 
     Constraint.save_digests ();
