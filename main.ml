@@ -34,7 +34,7 @@ let read_overrides_file filename =
     | l ->
        begin match String.split_on_char ' ' l with
          | [fun_id; fun_file] ->
-            overrides := !overrides @ [(fun_id, fun_file)]
+            overrides := !overrides @ [(fun_id, Filename.basename fun_file)]
          | [] -> ()
          | _ -> failwith ("Failed to parse override in line " ^ l)
        end;
@@ -883,7 +883,7 @@ let process_asl_file ((ctx : Translate_asl.ctx), maps, events, clauses, previous
 
   (* Filter out overridden functions that should be taken from other files *)
   let overriden_funs =
-    List.filter (fun (_, f) -> f <> filename) !overrides
+    List.filter (fun (_, f) -> f <> Filename.basename filename) !overrides
     |> List.map fst |> StringSet.of_list
   in
   let overridden decl =
