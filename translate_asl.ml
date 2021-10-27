@@ -85,6 +85,20 @@ let empty_ctx = {
 
 module StringSet = Set.Make(String)
 
+module PC_config = struct
+  type t = Type_check.tannot
+  let typ_of_pat = Type_check.typ_of_pat
+end
+
+module PC = Pattern_completeness.Make(PC_config);;
+
+let pats_complete l env ps typ =
+  let ctx = {
+      Pattern_completeness.variants = Type_check.Env.get_variants env;
+      Pattern_completeness.enums = Type_check.Env.get_enums env
+    } in
+  PC.is_complete l ctx ps typ
+
 let builtins = StringSet.of_list [
   "eq_enum"; "ne_enum";
   "Min"; "Max"; "Abs";
@@ -655,7 +669,10 @@ let is_bits_local = check_local (fun lvar -> is_bits_typ (lvar_typ lvar))
 let local_typ ctx id = lvar_typ (Bindings.find id ctx.locals)
 
 let declare_local ?mut:(mut=Mutable) id typ ctx =
-  { ctx with locals = Bindings.add id (Owned (mut, typ)) ctx.locals }
+  let id' = sail_id_of_ident id in
+  let tc_env' = try Type_check.Env.add_local id' (mut, typ) ctx.tc_env with _ -> ctx.tc_env in
+  let locals' = Bindings.add id (Owned (mut, typ)) ctx.locals in
+  { ctx with locals = locals'; tc_env = tc_env' }
 
 let declare_immutable = declare_local ~mut:Immutable
 
@@ -1568,17 +1585,31 @@ and sail_of_stmt ctx (stmt : ASL_AST.stmt) =
      in
      mk_exp (E_if (sail_of_expr ctx c, t_exp, e_exp))
   | ASL_AST.Stmt_Case (e, alts, otherwise, _) ->
+     let e' = sail_of_expr ctx e in
      let alts' = List.concat (List.map (sail_of_alt ctx) alts) in
      let otherwise' =
        match otherwise with
        | Some stmts ->
           [mk_pexp (Pat_exp (mk_pat P_wild, sail_of_stmts ctx stmts))]
        | None ->
-          let pc_ctx = Type_check.Env.pattern_completeness_ctx ctx.tc_env in
-          if Pattern_completeness.is_complete pc_ctx alts' then [] else
-          [mk_pexp (Pat_exp (mk_pat P_wild, sail_of_stmts ctx []))]
+          let is_complete =
+            try
+              let e'' = Type_check.infer_exp ctx.tc_env e' in
+              let typ = Type_check.typ_of e'' in
+              (* Remove bodies of cases so that type checking errors there
+               * won't stop the pattern completeness check *)
+              let strip_exp pexp =
+                let (pat, guard, exp, a) = destruct_pexp pexp in
+                Ast_util.construct_pexp (pat, guard, sail_of_stmts ctx [], a)
+              in
+              let check alt = Type_check.check_case ctx.tc_env typ (strip_exp alt) unit_typ in
+              let alts'' = List.map check alts' in
+              pats_complete Parse_ast.Unknown ctx.tc_env alts'' typ
+            with _ -> false
+          in
+          if is_complete then [] else [mk_pexp (Pat_exp (mk_pat P_wild, sail_of_stmts ctx []))]
      in
-     mk_exp (E_case (sail_of_expr ctx e, alts' @ otherwise'))
+     mk_exp (E_case (e', alts' @ otherwise'))
   | ASL_AST.Stmt_For (var, start, dir, stop, stmts, l) ->
      let var' = sail_id_of_ident var in
      let start' = sail_of_expr ctx start in
@@ -1887,7 +1918,7 @@ let sail_valspec_of_decl ?ncs:(ncs=[]) ctx id ret_ty args =
   let typschm = sail_typschm_of_funtype ~ncs:ncs ctx id ret_ty args in
   [mk_val_spec (VS_val_spec (typschm, id', [], false))]
 
-let sail_fundef_of_decl ctx id ret_ty args stmts =
+let sail_fundef_of_decl ?ncs:(ncs=[]) ctx id ret_ty args stmts =
   let id' = sail_id_of_ident id in
   (* Add any variables that occur only in the return type as implicits *)
   let implicit_arg v = (Type_Constructor (Ident ("implicit")), v) in
@@ -1934,6 +1965,10 @@ let sail_fundef_of_decl ctx id ret_ty args stmts =
     { ctx with bound_exprs = ExprMap.add key id ctx.bound_exprs }
   in
   let ctx = List.fold_left add_vl_ctx ctx vl_bindings in
+  (* Update Sail type-checking environment *)
+  let (TypSchm_aux (TypSchm_ts (typq, _), _)) = sail_typschm_of_funtype ~ncs ctx id ret_ty args in
+  let tc_env' = Type_check.add_typquant Parse_ast.Unknown typq ctx.tc_env in
+  let ctx = { ctx with tc_env = tc_env' } in
   (* Add arguments to context *)
   let declare_arg (ty, id) ctx = declare_immutable id (sail_of_ty ctx ty) ctx in
   let is_proc = (ret_ty = ASL_TC.type_unit) in
@@ -2355,7 +2390,7 @@ let sail_of_declaration ctx (decl : ASL_AST.declaration) =
      in
      let exec_id = add_name_prefix "execute" id in
      sail_valspec_of_decl ~ncs:constraints exec_ctx exec_id unit_ty (vl_args @ exec_args) @
-     sail_fundef_of_decl exec_ctx exec_id unit_ty (vl_args @ exec_args) exec @
+     sail_fundef_of_decl ~ncs:constraints exec_ctx exec_id unit_ty (vl_args @ exec_args) exec @
      List.concat (List.map (sail_of_encoding ctx opost exec_id vl_exprs exec_args conditional) encodings)
   | Decl_NewMapDefn (_, _, _, _, _)
   | Decl_MapClause (_, _, _, _, _)
