@@ -756,7 +756,7 @@ let rewrite_add_constraint l env nc local_ncs ast =
           (* We want to remove any conjunct in the constraint we are
              adding that is derivable from existing constraints, so as
              to not duplicate constraints in the type signature. *)
-          let env = add_typquant tq_l typq env in
+          let env = Env.add_typquant tq_l typq env in
           let conjs = List.filter (fun conj -> not (prove __POS__ env conj)) conjs in
           (* Any constraint in local_ncs that cannot be derived by the
              function quantifer must have been introduced via flow

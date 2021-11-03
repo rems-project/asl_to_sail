@@ -1967,7 +1967,7 @@ let sail_fundef_of_decl ?ncs:(ncs=[]) ctx id ret_ty args stmts =
   let ctx = List.fold_left add_vl_ctx ctx vl_bindings in
   (* Update Sail type-checking environment *)
   let (TypSchm_aux (TypSchm_ts (typq, _), _)) = sail_typschm_of_funtype ~ncs ctx id ret_ty args in
-  let tc_env' = Type_check.add_typquant Parse_ast.Unknown typq ctx.tc_env in
+  let tc_env' = Type_check.Env.add_typquant Parse_ast.Unknown typq ctx.tc_env in
   let ctx = { ctx with tc_env = tc_env' } in
   (* Add arguments to context *)
   let declare_arg (ty, id) ctx = declare_immutable id (sail_of_ty ctx ty) ctx in
