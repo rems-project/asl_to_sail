@@ -975,37 +975,42 @@ let slice_processed_files fs =
   end
 
 let generate_stubs ctx processed_files =
-  (* Determine declared but not defined functions *)
-  if not !quiet then print_endline "Generating stubs for missing functions";
-  let decls = List.concat (List.map asl_decls_of_processed_file processed_files) in
-  let ast = List.map sail_ast_of_processed_file processed_files |> List.fold_left append_ast Ast_defs.empty_ast |> Scattered.descatter in
-  let defined_sail_funs = List.map get_fundef_id ast.defs |> List.concat |> IdSet.of_list in
-  let is_undefined id =
-    let id' = Translate_asl.sail_id_of_ident id in
-    not (IdSet.mem id' defined_sail_funs) && IdSet.mem id' (val_spec_ids ast.defs)
+  let stubs =
+    if !gen_stubs then begin
+      (* Determine declared but not defined functions *)
+      if not !quiet then print_endline "Generating stubs for missing functions";
+      let decls = List.concat (List.map asl_decls_of_processed_file processed_files) in
+      let ast = List.map sail_ast_of_processed_file processed_files |> List.fold_left append_ast Ast_defs.empty_ast |> Scattered.descatter in
+      let defined_sail_funs = List.map get_fundef_id ast.defs |> List.concat |> IdSet.of_list in
+      let is_undefined id =
+        let id' = Translate_asl.sail_id_of_ident id in
+        not (IdSet.mem id' defined_sail_funs) && IdSet.mem id' (val_spec_ids ast.defs)
+      in
+      let add_stub stubs = function
+        | Decl_FunType (ty, id, args, l) when is_undefined id ->
+           ASL_Utils.Bindings.add id (Decl_FunDefn (ty, id, args, [Stmt_FunReturn (Expr_Unknown ty, l)], l)) stubs
+        | Decl_ProcType (id, args, l) when is_undefined id ->
+           ASL_Utils.Bindings.add id (Decl_ProcDefn (id, args, [Stmt_ProcReturn l], l)) stubs
+        | Decl_VarGetterType (ty, id, l) when is_undefined id ->
+           ASL_Utils.Bindings.add id (Decl_VarGetterDefn (ty, id, [Stmt_FunReturn (Expr_Unknown ty, l)], l)) stubs
+        | Decl_ArrayGetterType (ty, id, args, l) when is_undefined id ->
+           ASL_Utils.Bindings.add id (Decl_ArrayGetterDefn (ty, id, args, [Stmt_FunReturn (Expr_Unknown ty, l)], l)) stubs
+        | Decl_VarSetterType (id, ty, arg, l) when is_undefined id ->
+           ASL_Utils.Bindings.add id (Decl_VarSetterDefn (id, ty, arg, [Stmt_ProcReturn l], l)) stubs
+        | Decl_ArraySetterType (id, args, ty, var, l) when is_undefined id ->
+           ASL_Utils.Bindings.add id (Decl_ArraySetterDefn (id, args, ty, var, [Stmt_ProcReturn l], l)) stubs
+        | _ -> stubs
+      in
+      let stubs = List.fold_left add_stub ASL_Utils.Bindings.empty decls |> ASL_Utils.Bindings.bindings |> List.map snd in
+      let chunks = List.map (fun decl -> Chunk_decls [decl]) stubs in
+      let quiet_orig = !quiet in
+      quiet := true;
+      let (checked_ast, ast, ctx) = convert_ast ~use_patches:false ctx chunks in
+      quiet := quiet_orig;
+      [ASL_File ("stubs.asl", stubs, checked_ast, ast)]
+    end else []
   in
-  let add_stub stubs = function
-    | Decl_FunType (ty, id, args, l) when is_undefined id ->
-       ASL_Utils.Bindings.add id (Decl_FunDefn (ty, id, args, [Stmt_FunReturn (Expr_Unknown ty, l)], l)) stubs
-    | Decl_ProcType (id, args, l) when is_undefined id ->
-       ASL_Utils.Bindings.add id (Decl_ProcDefn (id, args, [Stmt_ProcReturn l], l)) stubs
-    | Decl_VarGetterType (ty, id, l) when is_undefined id ->
-       ASL_Utils.Bindings.add id (Decl_VarGetterDefn (ty, id, [Stmt_FunReturn (Expr_Unknown ty, l)], l)) stubs
-    | Decl_ArrayGetterType (ty, id, args, l) when is_undefined id ->
-       ASL_Utils.Bindings.add id (Decl_ArrayGetterDefn (ty, id, args, [Stmt_FunReturn (Expr_Unknown ty, l)], l)) stubs
-    | Decl_VarSetterType (id, ty, arg, l) when is_undefined id ->
-       ASL_Utils.Bindings.add id (Decl_VarSetterDefn (id, ty, arg, [Stmt_ProcReturn l], l)) stubs
-    | Decl_ArraySetterType (id, args, ty, var, l) when is_undefined id ->
-       ASL_Utils.Bindings.add id (Decl_ArraySetterDefn (id, args, ty, var, [Stmt_ProcReturn l], l)) stubs
-    | _ -> stubs
-  in
-  let stubs = List.fold_left add_stub ASL_Utils.Bindings.empty decls |> ASL_Utils.Bindings.bindings |> List.map snd in
-  let chunks = List.map (fun decl -> Chunk_decls [decl]) stubs in
-  let quiet_orig = !quiet in
-  quiet := true;
-  let (checked_ast, ast, ctx) = convert_ast ~use_patches:false ctx chunks in
-  quiet := quiet_orig;
-  ASL_File ("stubs.asl", stubs, checked_ast, ast)
+  processed_files @ stubs
 
 let main () : unit =
   begin
@@ -1034,7 +1039,7 @@ let main () : unit =
     let processed_files =
       processed_files
       @ [process_map_clauses ctx (maps @ clauses); process_event_clauses ctx (events @ clauses)]
-      @ (if !gen_stubs then [generate_stubs ctx processed_files] else [])
+      |> generate_stubs ctx
       |> slice_processed_files
     in
     if not !quiet then print_endline "Writing generated files";
