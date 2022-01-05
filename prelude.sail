@@ -312,3 +312,14 @@ function __ReadRAM(a, n, mem, addr) = __ReadMemory(n, sail_zero_extend(addr, 56)
 
 val __WriteRAM : forall 'a 'n, 0 < 'a <= 56 & 'n >= 0. (int('a), int('n), bits('a), bits('a), bits(8 * 'n)) -> unit effect {wmem}
 function __WriteRAM(a, n, mem, addr, value) = __WriteMemory(n, sail_zero_extend(addr, 56), value)
+
+/* C emulator support functions */
+
+val __GetVerbosity = {c: "sail_get_verbosity"} : unit -> bits(64) effect {rreg, undef}
+function __GetVerbosity() = 0x0000_0000_0000_0000
+
+val check_cycle_count = { c: "cycle_count" } : unit -> unit
+function check_cycle_count() = ()
+
+val get_cycle_count = { c: "get_cycle_count" } : unit -> int
+function get_cycle_count() = 0
