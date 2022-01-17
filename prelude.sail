@@ -121,7 +121,7 @@ function Bit(b) = b[0]
 val Bits : bit -> bits(1)
 function Bits(b) = (if b == bitone then 0b1 else 0b0)
 
-val integer_subrange : forall 'hi 'lo. (int, int('hi), int('lo)) -> bits('hi - 'lo + 1)
+val integer_subrange : forall 'hi 'lo, 'lo <= 'hi. (int, int('hi), int('lo)) -> bits('hi - 'lo + 1)
 function integer_subrange(i, hi, lo) = get_slice_int(hi - lo + 1, i, lo)
 
 overload vector_subrange = {integer_subrange}
@@ -150,7 +150,7 @@ val array_update = {
   ocaml: "update",
   interpreter: "update",
   lem: "update_list_inc",
-  coq: "update_list_inc",
+  coq: "vec_update_inc",
   c: "vector_update"
 } : forall 'n 'm ('a : Type), 0 <= 'm < 'n. (vector('n, inc, 'a), int('m), 'a) -> vector('n, inc, 'a)
 
@@ -166,25 +166,25 @@ overload AND = {and_vec}
 overload OR = {or_vec}
 overload EOR = {xor_vec}
 
-val SignExtend0 = "sign_extend" : forall 'n 'm, 'n > 0 & 'm > 0.
+val SignExtend0 = "sign_extend" : forall 'n 'm, 'n > 0 & 'm >= 'n.
   (bits('n), int('m)) -> bits('m)
 
-val SignExtend1 : forall 'n 'm, 'n > 0 & 'm > 0.
+val SignExtend1 : forall 'n 'm, 'n > 0 & 'm >= 'n.
   (implicit('m), bits('n)) -> bits('m)
 function SignExtend1(m, x) = SignExtend0(x, m)
 
 overload SignExtend = {SignExtend0, SignExtend1}
 
-val ZeroExtend0 = "zero_extend" : forall 'n 'm, 'n >= 0 & 'm >= 0.
+val ZeroExtend0 = "zero_extend" : forall 'n 'm, 'n >= 0 & 'm >= 'n.
   (bits('n), int('m)) -> bits('m)
 
-val ZeroExtend1 : forall 'n 'm, 'n >= 0 & 'm >= 0.
+val ZeroExtend1 : forall 'n 'm, 'n >= 0 & 'm >= 'n.
   (implicit('m), bits('n)) -> bits('m)
 function ZeroExtend1(m, x) = ZeroExtend0(x, m)
 
 overload ZeroExtend = {ZeroExtend0, ZeroExtend1}
 
-val Slice_int : forall 'w. (int, int, int('w)) -> bits('w)
+val Slice_int : forall 'w, 'w >= 0. (int, int, int('w)) -> bits('w)
 function Slice_int(i, l, n) = get_slice_int(n, i, l)
 
 overload Slice = {slice, Slice_int}
