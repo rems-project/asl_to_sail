@@ -721,7 +721,7 @@ and iterate_check n env sail =
             when not (prove __POS__ env' (nc_not nc)) ->
              begin
                try
-                 Sail_to_sail.rewrite_add_constraint l env nc ncs sail
+                 Sail_to_sail.rewrite_add_constraint l env env' nc ncs sail
                with
                | Type_error (_, l, err) ->
                   prerr_endline Util.(Type_error.string_of_type_error err |> red |> clear);

@@ -734,7 +734,7 @@ let insert_into_block n insertion defs =
 
 exception Not_top_level of n_constraint;;
 
-let rewrite_add_constraint l env nc local_ncs ast =
+let rewrite_add_constraint l env env_l nc local_ncs ast =
   (* prerr_endline "Calling rewrite_add_constraint"; *)
   match l with
   | Parse_ast.Unique (n, l) ->
@@ -757,7 +757,9 @@ let rewrite_add_constraint l env nc local_ncs ast =
              adding that is derivable from existing constraints, so as
              to not duplicate constraints in the type signature. *)
           let env = Env.add_typquant tq_l typq env in
-          let conjs = List.filter (fun conj -> not (prove __POS__ env conj)) conjs in
+          let conjs = List.filter (fun conj -> not (prove __POS__ env_l conj ||
+                                                      (KidSet.for_all (fun tyvar -> Env.shadows tyvar env_l == 0) (tyvars_of_constraint conj) &&
+                                                 prove __POS__ env conj))) conjs in
           (* Any constraint in local_ncs that cannot be derived by the
              function quantifer must have been introduced via flow
              typing. *)
@@ -770,9 +772,11 @@ let rewrite_add_constraint l env nc local_ncs ast =
           | conj :: conjs ->
              let nc = List.fold_left nc_and conj conjs in
              let nc = List.fold_left nc_or nc flows in
+             let nc_tyvars = tyvars_of_constraint nc in
              (* We can only add a constraint to the valspec if it
                 contains only variables defined by that valspec. *)
              if KOptSet.subset (kopts_of_constraint nc) (KOptSet.of_list kopts)
+                && KidSet.for_all (fun tyvar -> Env.shadows tyvar env_l == 0) nc_tyvars
                 && List.length (quant_items typq) > 0 then
                mk_typschm (mk_typquant (quant_items typq @ [mk_qi_nc nc])) typ
              else
