@@ -187,6 +187,13 @@ let vl_expr bind_ariths expr = match expr with
      let nexp = ntimes (nvar (mk_kid var)) (nconstant (Big_int.of_string i)) in
      let nc = nc_eq (nvar (mk_kid var')) nexp in
      Some (Ident var', expr, nc)
+  | Expr_TApply (mul_int, _, [Expr_LitInt i; Expr_TApply (div_int, _, [var; Expr_LitInt j])])
+    when bind_ariths && name_of_ident mul_int = "mul_int" && name_of_ident div_int = "fdiv_int" && (is_vl_read var || is_pl_read var) ->
+     let var = if is_pl_read var then "PL" else "VL" in
+     let var' = var ^ "_mul_" ^ i ^ "_div_" ^ j in
+     let nexp = ntimes (nconstant (Big_int.of_string i)) (napp (mk_id "div") [nvar (mk_kid var); nconstant (Big_int.of_string j)]) in
+     let nc = nc_eq (nvar (mk_kid var')) nexp in
+     Some (Ident var', expr, nc)
   | Expr_TApply (div_int, _, [var; Expr_LitInt i])
     when bind_ariths && name_of_ident div_int = "fdiv_int" && (is_vl_read var || is_pl_read var) ->
      let var = if is_pl_read var then "PL" else "VL" in
