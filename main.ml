@@ -26,6 +26,7 @@ let overrides = ref ([] : (string * string) list)
 let slice_roots = ref ([] : string list)
 let slice_cuts = ref ([] : string list)
 let gen_stubs = ref false
+let stop_at = ref ([] : string list)
 
 let read_overrides_file filename =
   let file = open_in filename in
@@ -84,6 +85,9 @@ let options = Arg.align ([
   ( "-gen_stubs",
     Arg.Set gen_stubs,
     " generate stubs for missing functions and output to stubs.sail");
+  ( "-stop_at",
+    Arg.String (fun l -> stop_at := !stop_at @ (String.split_on_char ',' l)),
+    " stop at functions in the given comma-separated list and allow patching");
 ])
 
 let ident_loc_of_decl (decl : declaration) : (ident * l) =
@@ -843,6 +847,9 @@ and convert_ast ?use_patches:(use_patches=true) ctx = function
               write_sail sail (sail_filename "temp");
               ignore (Process_file.parse_file (sail_filename "temp"))
             end;
+
+            if List.exists (fun f -> List.mem (string_of_id f) !stop_at) fun_ids
+            then raise (Asl_type_error (sail, Parse_ast.Unknown, "Asked to stop here"));
 
             let ctx = { ctx with tc_env = env } in
             let (checked_sail', sail', ctx) = convert_ast ~use_patches ctx rest in
