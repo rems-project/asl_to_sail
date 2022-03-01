@@ -634,9 +634,17 @@ let is_enum ctx id =
   | _ -> false
 
 let kopts_of_vars ctx (vars : ASL_Utils.IdentSet.t) =
+  (* A top-level constant like MAX_VL will appear as a type id *)
+  let sail_typ_ids =
+    Type_check.Env.get_typ_synonyms ctx.tc_env
+    |> Ast_util.Bindings.bindings
+    |> List.map fst
+    |> IdSet.of_list
+  in
   let add_kid var kids =
     let kid = sail_kid_of_ident var in
-    if KBindings.mem kid (Type_check.Env.get_typ_vars ctx.tc_env) then
+    let id = sail_id_of_ident var in
+    if KBindings.mem kid (Type_check.Env.get_typ_vars ctx.tc_env) || IdSet.mem id sail_typ_ids then
       kids
     else
       KidSet.add kid kids
