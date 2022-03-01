@@ -11,6 +11,17 @@ $include <reverse_endianness.sail>
 $include <mono_rewrites.sail>
 $include <regfp.sail>
 
+/* These could be given refined types, if necessary */
+val implies : (bool, bool) -> bool
+function implies(p,q) = not_bool(p) | q
+infixr 1 -->
+overload operator --> = {implies}
+
+val iff : (bool, bool) -> bool
+function iff(p,q) = implies(p,q) & implies(q,p)
+infix 1 <-->
+overload operator <--> = {iff}
+
 val eq_any = {ocaml: "(fun (x, y) -> x = y)", interpreter: "eq_anything", lem: "eq", coq: "generic_eq", c: "eq_anything"} : forall ('a : Type). ('a, 'a) -> bool
 
 val eq_bits_int : forall 'n 'm, 'n >= 0 & 'm >= 0. (bits('n), int('m)) -> bool

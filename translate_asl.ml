@@ -581,7 +581,7 @@ let sailify_binop (op : ASL_AST.binop) =
   | ASL_AST.Binop_ShiftR -> mk_op_id ">>"
   | ASL_AST.Binop_BoolAnd -> mk_op_id "&"
   | ASL_AST.Binop_BoolOr -> mk_op_id "|"
-  | ASL_AST.Binop_BoolIff -> mk_op_id "<->"
+  | ASL_AST.Binop_BoolIff -> mk_op_id "<-->"
   | ASL_AST.Binop_BoolImplies -> mk_op_id "-->"
   | ASL_AST.Binop_BitOr -> mk_op_id "|"
   | ASL_AST.Binop_BitEor -> mk_id "EOR"
