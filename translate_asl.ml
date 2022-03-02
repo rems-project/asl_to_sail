@@ -549,6 +549,7 @@ let sailify_name s =
     | "ne_bits" -> "neq_bits"
     | "ne_real" -> "neq_real"
     | "Sqrt" -> "sqrt"
+    | "slice" -> "slice_name" (* should really avoid all existing function names *)
     | _ ->
       (*if is_decode s
       then fix_decode_name (str_remove "aarch64_instrs_" (str_replace "__decode" "_decode" remove_dot))
