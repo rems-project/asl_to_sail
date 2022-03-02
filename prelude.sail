@@ -324,6 +324,8 @@ function __ReadRAM(a, n, mem, addr) = __ReadMemory(n, sail_zero_extend(addr, 56)
 val __WriteRAM : forall 'a 'n, 0 < 'a <= 56 & 'n >= 0. (int('a), int('n), bits('a), bits('a), bits(8 * 'n)) -> unit effect {wmem}
 function __WriteRAM(a, n, mem, addr, value) = __WriteMemory(n, sail_zero_extend(addr, 56), value)
 
+val __WakeupRequest = {ocaml: "wakeup_request", lem: "wakeup_request", smt: "wakeup_request", interpreter: "wakeup_request", c: "wakeup_request"}: unit -> unit effect {rreg, undef}
+
 /* C emulator support functions */
 
 val __GetVerbosity = {c: "sail_get_verbosity"} : unit -> bits(64) effect {rreg, undef}
