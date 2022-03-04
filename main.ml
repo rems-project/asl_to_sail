@@ -716,7 +716,7 @@ and iterate_check n env sail =
     let checked_sail, env = check env sail in
     checked_sail, sail, env
   with
-  | Type_error (env', l, err) when n <= 20 ->
+  | Type_error (env', l, err) when n <= 50 ->
      begin match merge_unresolved_quants env' err with
      | Some (quants, locals, ncs) ->
         let fix_quant sail quant =
