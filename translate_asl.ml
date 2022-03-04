@@ -151,18 +151,21 @@ let read_mono_splits_file filename =
  *)
 
 let vl_read_id = ASL_AST.FIdent("VL.read", 0)
+let svl_read_id = ASL_AST.FIdent("SVL.read", 0)
 let pl_read_id = ASL_AST.FIdent("PL.read", 0)
 let pl_of_vl_id = ASL_AST.Ident("PL_of_VL")
 
-let is_vl_read = function
-  | Expr_TApply (FIdent ("VL.read", _), _, _) -> true
-  | _ -> false
-
-let is_pl_read = function
-  | Expr_TApply (FIdent ("PL.read", _), _, _) -> true
-  | Expr_TApply (pl_of_vl, _, [vl]) ->
-     Id.compare pl_of_vl pl_of_vl_id = 0 && (is_vl_read vl || vl = Expr_Var (Ident "VL"))
-  | _ -> false
+let rec is_vl_read = function
+  | Expr_TApply (FIdent ("VL.read", _), _, _) -> Some "VL"
+  | Expr_TApply (FIdent ("SVL.read", _), _, _) -> Some "SVL"
+  | Expr_TApply (FIdent ("PL.read", _), _, _) -> Some "PL"
+  | Expr_TApply (pl_of_vl, _, [vl]) when Id.compare pl_of_vl pl_of_vl_id = 0 ->
+     begin match vl with
+     | Expr_TApply (FIdent ("VL.read", _), _, _) -> Some "PL"
+     | Expr_Var (Ident "VL") -> Some "PL"
+     | _ -> None
+     end
+  | _ -> None
 
 (* In order to support the Sail bitvector length monomorphisation for
    the prover backends, we support an optional pre-monomorphisation of
@@ -181,33 +184,45 @@ let implemented_vls = ref [
 
 let vl_expr bind_ariths expr = match expr with
   | Expr_TApply (mul_int, _, [var; Expr_LitInt i])
-    when bind_ariths && name_of_ident mul_int = "mul_int" && (is_vl_read var || is_pl_read var) ->
-     let var = if is_pl_read var then "PL" else "VL" in
-     let var' = var ^ "_mul_" ^ i in
-     let nexp = ntimes (nvar (mk_kid var)) (nconstant (Big_int.of_string i)) in
-     let nc = nc_eq (nvar (mk_kid var')) nexp in
-     Some (Ident var', expr, nc)
+    when bind_ariths && name_of_ident mul_int = "mul_int" ->
+     begin match is_vl_read var with
+     | Some var ->
+        let var' = var ^ "_mul_" ^ i in
+        let nexp = ntimes (nvar (mk_kid var)) (nconstant (Big_int.of_string i)) in
+        let nc = nc_eq (nvar (mk_kid var')) nexp in
+        Some (Ident var', expr, nc)
+     | None -> None
+     end
   | Expr_TApply (mul_int, _, [Expr_LitInt i; Expr_TApply (div_int, _, [var; Expr_LitInt j])])
-    when bind_ariths && name_of_ident mul_int = "mul_int" && name_of_ident div_int = "fdiv_int" && (is_vl_read var || is_pl_read var) ->
-     let var = if is_pl_read var then "PL" else "VL" in
-     let var' = var ^ "_mul_" ^ i ^ "_div_" ^ j in
-     let nexp = ntimes (nconstant (Big_int.of_string i)) (napp (mk_id "div") [nvar (mk_kid var); nconstant (Big_int.of_string j)]) in
-     let nc = nc_eq (nvar (mk_kid var')) nexp in
-     Some (Ident var', expr, nc)
+    when bind_ariths && name_of_ident mul_int = "mul_int" && name_of_ident div_int = "fdiv_int" ->
+     begin match is_vl_read var with
+     | Some var ->
+        let var' = var ^ "_mul_" ^ i ^ "_div_" ^ j in
+        let nexp = ntimes (nconstant (Big_int.of_string i)) (napp (mk_id "div") [nvar (mk_kid var); nconstant (Big_int.of_string j)]) in
+        let nc = nc_eq (nvar (mk_kid var')) nexp in
+        Some (Ident var', expr, nc)
+     | None -> None
+     end
   | Expr_TApply (div_int, _, [var; Expr_LitInt i])
-    when bind_ariths && name_of_ident div_int = "fdiv_int" && (is_vl_read var || is_pl_read var) ->
-     let var = if is_pl_read var then "PL" else "VL" in
-     let var' = var ^ "_div_" ^ i in
-     let nexp = napp (mk_id "div") [nvar (mk_kid var); nconstant (Big_int.of_string i)] in
-     let nc = nc_eq (nvar (mk_kid var')) nexp in
-     Some (Ident var', expr, nc)
-  | _ when is_vl_read expr ->
+    when bind_ariths && name_of_ident div_int = "fdiv_int" ->
+     begin match is_vl_read var with
+     | Some var ->
+        let var' = var ^ "_div_" ^ i in
+        let nexp = napp (mk_id "div") [nvar (mk_kid var); nconstant (Big_int.of_string i)] in
+        let nc = nc_eq (nvar (mk_kid var')) nexp in
+        Some (Ident var', expr, nc)
+     | None -> None
+     end
+  | _ when is_vl_read expr = Some "VL" ->
      let nc = mk_nc (NC_app (mk_id "is_VL", [arg_nexp (nvar (mk_kid "VL"))])) in
      Some (Ident "VL", expr, nc)
-  | _ when is_pl_read expr ->
+  | _ when is_vl_read expr = Some "SVL" ->
+     let nc = mk_nc (NC_app (mk_id "is_VL", [arg_nexp (nvar (mk_kid "SVL"))])) in
+     Some (Ident "SVL", expr, nc)
+  | _ when is_vl_read expr = Some "PL" ->
      let nc = mk_nc (NC_app (mk_id "is_PL", [arg_nexp (nvar (mk_kid "PL"))])) in
      Some (Ident "PL", expr, nc)
-  | Expr_TApply (f, _, [vl]) when Id.compare f pl_of_vl_id = 0 && is_vl_read vl ->
+  | Expr_TApply (f, _, [vl]) when Id.compare f pl_of_vl_id = 0 && is_vl_read vl = Some "VL"->
      let nc = nc_eq (nvar (mk_kid "PL")) (napp (mk_id "div") [nvar (mk_kid "VL"); nint 8]) in
      let expr = Expr_TApply (pl_of_vl_id, [], [Expr_Var (Ident "VL")]) in
      Some (Ident "PL", expr, nc)
@@ -235,7 +250,7 @@ let vl_exprs_of_stmts bind_ariths stmts =
   ignore (visit_stmts (vls :> aslVisitor) stmts);
   ExprMap.bindings vls#result
   |> List.map (fun (key, (id, expr, nc)) -> (key, id, expr, nc))
-  |> List.partition (fun (_, id, _, _) -> name_of_ident id = "VL")
+  |> List.partition (fun (_, id, _, _) -> name_of_ident id = "VL" || name_of_ident id = "SVL")
   |> fun (vl, others) -> vl @ others
 
 class replaceExprClass (replace: expr -> expr option) = object
@@ -249,7 +264,7 @@ end
 
 let rewrite_pl stmts =
   let rewrite expr =
-    if is_pl_read expr then
+    if is_vl_read expr = Some "PL" then
       Some (Expr_TApply (pl_of_vl_id, [], [Expr_TApply (vl_read_id, [], [])]))
     else None
   in
@@ -259,14 +274,16 @@ let rewrite_pl stmts =
 let subst_vl vl stmts =
   let rewrite expr =
     let pl = vl / 8 in
-    if is_vl_read expr then Some (Expr_LitInt (string_of_int vl)) else
-    if is_pl_read expr then Some (Expr_LitInt (string_of_int pl)) else
-    match expr with
-    | Expr_TApply (f, _, [vl]) when Id.compare f pl_of_vl_id = 0 ->
-       if is_vl_read vl || vl = Expr_Var (Ident "VL") then
-         Some (Expr_LitInt (string_of_int pl))
-       else None
-    | _ -> None
+    match is_vl_read expr with
+    | Some "VL" | Some "SVL" -> Some (Expr_LitInt (string_of_int vl))
+    | Some "PL" -> Some (Expr_LitInt (string_of_int pl))
+    | _ ->
+       match expr with
+       | Expr_TApply (f, _, [vl]) when Id.compare f pl_of_vl_id = 0 ->
+          if is_vl_read vl = Some "VL" || vl = Expr_Var (Ident "VL") then
+            Some (Expr_LitInt (string_of_int pl))
+          else None
+       | _ -> None
   in
   let re = new replaceExprClass rewrite in
   LibASL.Asl_visitor.visit_stmts re stmts
@@ -2136,8 +2153,11 @@ let sail_of_encoding ctx opost exec_id vl_exprs exec_args conditional encoding =
      let exec_args' = List.map (fun (_, v) -> Expr_Var v) exec_args in
      let constraints = int_constraints_of_stmts decode_body in
      let constraints = int_constraints_of_stmts ~known_vars:constraints decode_body in
+     let is_vl_read_for_split expr =
+       match is_vl_read expr with Some "VL" | Some "SVL" -> true | _ -> false
+     in
      let split_vls stmt =
-       if !mono_vl && List.exists is_vl_read vl_exprs then
+       if !mono_vl && List.exists is_vl_read_for_split vl_exprs then
          let vl_call = Expr_TApply (vl_read_id, [], []) in
          let alt vl =
            let vl' = string_of_int vl in
