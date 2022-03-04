@@ -310,19 +310,30 @@ val ___ReadRAM = "read_ram" : forall 'n 'm.
 val ___WriteRAM = "write_ram" : forall 'n 'm.
   (atom('m), atom('n), bits('m), bits('m), bits(8 * 'n)) -> unit effect {wmem}
 
-val __ReadMemory = {lem: "__ReadMemory"} : forall 'n, 'n >= 0. (int('n), bits(56)) -> bits(8 * 'n) effect {rmem}
-function __ReadMemory(n, addr) = {
+val __ReadMemory0 = {lem: "__ReadMemory"} : forall 'n, 'n >= 0. (int('n), bits(56)) -> bits(8 * 'n) effect {rmem}
+function __ReadMemory0(n, addr) = {
   let result = ___ReadRAM(56, n, sail_zeros(56), addr);
   result
 }
-val __WriteMemory = {lem: "__WriteMemory"} : forall 'n, 'n >= 0. (int('n), bits(56), bits(8 * 'n)) -> unit effect {wmem}
-function __WriteMemory(n, addr, value) = ___WriteRAM(56, n, sail_zeros(56), addr, value)
+// TODO: like the ASL, we don't try to do transactions yet
+val __ReadMemory1 : forall 'n, 'n >= 0. (int('n), bits(52), bool) -> bits(8 * 'n) effect {rmem}
+function __ReadMemory1(n, addr, transactional) = __ReadMemory0(n, ZeroExtend(addr))
+overload __ReadMemory = { __ReadMemory0, __ReadMemory1 }
+
+val __WriteMemory0 = {lem: "__WriteMemory"} : forall 'n, 'n >= 0. (int('n), bits(56), bits(8 * 'n)) -> unit effect {wmem}
+function __WriteMemory0(n, addr, value) = ___WriteRAM(56, n, sail_zeros(56), addr, value)
+// TODO: similarly, but we don't even attempt what the ASL currently has
+val __WriteMemory1 : forall 'n, 'n >= 0. (int('n), bits(52), bits(8 * 'n), bool) -> unit effect {wmem}
+function __WriteMemory1(n, addr, value, transactional) = __WriteMemory0(n, ZeroExtend(addr), value)
+overload __WriteMemory = { __WriteMemory0, __WriteMemory1 }
 
 val __ReadRAM : forall 'a 'n, 0 < 'a <= 56 & 'n >= 0. (int('a), int('n), bits('a), bits('a)) -> bits(8 * 'n) effect {rmem}
 function __ReadRAM(a, n, mem, addr) = __ReadMemory(n, sail_zero_extend(addr, 56))
 
 val __WriteRAM : forall 'a 'n, 0 < 'a <= 56 & 'n >= 0. (int('a), int('n), bits('a), bits('a), bits(8 * 'n)) -> unit effect {wmem}
 function __WriteRAM(a, n, mem, addr, value) = __WriteMemory(n, sail_zero_extend(addr, 56), value)
+
+val __SleepRequest = {ocaml: "sleep_request", lem: "sleep_request", smt: "sleep_request", interpreter: "sleep_request", c: "sleep_request"}: unit -> unit effect {rreg, undef}
 
 val __WakeupRequest = {ocaml: "wakeup_request", lem: "wakeup_request", smt: "wakeup_request", interpreter: "wakeup_request", c: "wakeup_request"}: unit -> unit effect {rreg, undef}
 
