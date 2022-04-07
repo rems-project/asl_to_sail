@@ -308,7 +308,7 @@ function PL_of_VL(vl) = DIV(vl, 8)
 val ___ReadRAM = "read_ram" : forall 'n 'm.
   (atom('m), atom('n), bits('m), bits('m)) -> bits(8 * 'n) effect {rmem}
 val ___WriteRAM = "write_ram" : forall 'n 'm.
-  (atom('m), atom('n), bits('m), bits('m), bits(8 * 'n)) -> unit effect {wmem}
+  (atom('m), atom('n), bits('m), bits('m), bits(8 * 'n)) -> bool effect {wmem}
 
 val __ReadMemory0 = {lem: "__ReadMemory"} : forall 'n, 'n >= 0. (int('n), bits(56)) -> bits(8 * 'n) effect {rmem}
 function __ReadMemory0(n, addr) = {
@@ -321,7 +321,10 @@ function __ReadMemory1(n, addr, transactional) = __ReadMemory0(n, ZeroExtend(add
 overload __ReadMemory = { __ReadMemory0, __ReadMemory1 }
 
 val __WriteMemory0 = {lem: "__WriteMemory"} : forall 'n, 'n >= 0. (int('n), bits(56), bits(8 * 'n)) -> unit effect {wmem}
-function __WriteMemory0(n, addr, value) = ___WriteRAM(56, n, sail_zeros(56), addr, value)
+function __WriteMemory0(n, addr, value) = {
+  let _ = ___WriteRAM(56, n, sail_zeros(56), addr, value);
+  ()
+}
 // TODO: similarly, but we don't even attempt what the ASL currently has
 val __WriteMemory1 : forall 'n, 'n >= 0. (int('n), bits(52), bits(8 * 'n), bool) -> unit effect {wmem}
 function __WriteMemory1(n, addr, value, transactional) = __WriteMemory0(n, ZeroExtend(addr), value)
