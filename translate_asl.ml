@@ -232,6 +232,7 @@ class vlExprsClass bind_ariths = object
   inherit LibASL.Asl_visitor.nopAslVisitor
 
   val mutable vl_exprs = ExprMap.empty
+  val mutable vl_derived = LibASL.Asl_utils.Bindings.empty
   method result = vl_exprs
   method! vexpr expr =
     match vl_expr bind_ariths expr with
@@ -239,6 +240,51 @@ class vlExprsClass bind_ariths = object
        vl_exprs <- ExprMap.add expr (id, expr', nc) vl_exprs;
        DoChildren
     | None -> DoChildren
+  (* Scalable matrix extension instructions have VL related sizes with code of
+     the form:
+        integer  dim = VL DIV esize;
+        ...
+        bits(dim*dim*esize) result;
+     This detects these and pulls them out as a parameter. *)
+  method! vstmt stmt =
+    match stmt with
+    | Stmt_VarDecl (Type_Constructor (Ident "integer"), ident,
+                    (Expr_TApply (div_int, _, [var; divisor]) as expr), _)
+         when name_of_ident div_int = "fdiv_int" ->
+       let divisor = match divisor with
+         | Expr_LitInt i -> Some (nconstant (Big_int.of_string i))
+         | Expr_Var v -> Some (nvar (mk_kid (name_of_ident v)))
+         | _ -> None
+       in
+       begin match is_vl_read var, divisor with
+       | Some var, Some divisor ->
+          vl_derived <- LibASL.Asl_utils.Bindings.add ident (var, divisor, expr) vl_derived;
+          DoChildren
+       | _,_ -> DoChildren
+       end
+    | Stmt_VarDecl (Type_Bits
+                      (Expr_TApply (mul_int, _, [Expr_TApply (mul_int', _,
+                                                              [Expr_Var ident;
+                                                               Expr_Var ident']); mul_expr]) as expr),
+                    _, _, _)
+         when name_of_ident mul_int = "mul_int" && name_of_ident mul_int' = "mul_int" &&
+                Id.compare ident ident' == 0 ->
+       let mul_nexp = match mul_expr with
+         | Expr_LitInt i -> Some (nconstant (Big_int.of_string i))
+         | Expr_Var v -> Some (nvar (mk_kid (name_of_ident v)))
+         | _ -> None
+       in
+       begin match LibASL.Asl_utils.Bindings.find_opt ident vl_derived, mul_nexp with
+       | Some (id, divisor, derived_expr), Some mul_nexp ->
+          let var = name_of_ident ident ^ "_mul_mul" in
+          let nexp_ident = napp (mk_id "div") [nvar (mk_kid id); divisor] in
+          let nc = nc_eq (nvar (mk_kid var)) (ntimes (nexp_ident) (ntimes (nexp_ident) (mul_nexp))) in
+          let expr' = Expr_TApply (mul_int, [], [Expr_TApply (mul_int, [], [derived_expr; derived_expr]); mul_expr]) in
+          vl_exprs <- ExprMap.add expr (Ident var, expr', nc) vl_exprs;
+          DoChildren
+       | _,_ -> DoChildren
+       end
+    | _ -> DoChildren
 end
 
 let vl_exprs_of_stmts bind_ariths stmts =
