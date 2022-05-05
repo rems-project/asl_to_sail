@@ -1,9 +1,13 @@
-open Ast
-open Ast_defs
-open Ast_util
-open Type_check
+open Libsail.Ast
+open Libsail.Ast_defs
+open Libsail.Ast_util
+open Libsail.Type_check
 
 module Big_int = Nat_big_num
+module Type_check = Libsail.Type_check
+module Util = Libsail.Util
+module Parse_ast = Libsail.Parse_ast
+module Reporting = Libsail.Reporting
 
 (* ==== Re-writing overloaded ASL functions ==== *)
 
@@ -27,8 +31,8 @@ let id_append id str =
 let rename_funcl f (FCL_aux (FCL_Funcl (id, pexp), annot)) =
   FCL_aux (FCL_Funcl (f id, pexp), annot)
 
-let rename_fundef f (FD_aux (FD_function (r_opt, t_opt, e_opt, funcls), annot)) =
-  FD_aux (FD_function (r_opt, t_opt, e_opt, List.map (rename_funcl f) funcls), annot)
+let rename_fundef f (FD_aux (FD_function (r_opt, t_opt, funcls), annot)) =
+  FD_aux (FD_function (r_opt, t_opt, List.map (rename_funcl f) funcls), annot)
 
 let rec rename_fundefs n = function
   | (DEF_fundef fdef :: defs) -> DEF_fundef (rename_fundef (fun id -> id_append id (string_of_int n)) fdef) :: rename_fundefs (n + 1) defs
@@ -50,7 +54,7 @@ let rec rename_valspecs n = function
   | def :: defs -> rename_valspecs n defs
   | [] -> []
 
-let same_effects valspecs =
+(*let same_effects valspecs =
   let rec valspec_effects = function
     | DEF_spec (VS_aux (VS_val_spec (TypSchm_aux (TypSchm_ts (_, Typ_aux (Typ_fn (_, _, eff), _)), _), _, _, _), _)) :: specs ->
        union_effects eff (valspec_effects specs)
@@ -64,7 +68,7 @@ let same_effects valspecs =
     | [] -> []
     | _ -> failwith "Valspec found without function type"
   in
-  set_effects (valspec_effects valspecs) valspecs
+  set_effects (valspec_effects valspecs) valspecs*)
 
 let rewrite_overloaded_top sail =
   let valspecs = List.filter is_valspec sail in
@@ -76,7 +80,7 @@ let rewrite_overloaded_top sail =
     begin
       print_endline (Util.("Overloading" |> green |> clear));
       let id = valspec_id (valspec_of_def (List.hd valspecs)) in
-      let valspecs = same_effects (rename_valspecs 0 valspecs) in
+      let valspecs = (*same_effects*) (rename_valspecs 0 valspecs) in
       let get_set_overload =
         if Str.string_match (Str.regexp "^a[sg]et_") (string_of_id id) 0 then
           let id = mk_id (Str.replace_first (Str.regexp "^a[sg]et_") "" (string_of_id id)) in
@@ -297,8 +301,8 @@ let map_funcl_exps f id pat guard exp =
   (id, pat, Util.option_map f guard, f exp)
 
 let map_fundef f = function
-  | DEF_fundef (FD_aux (FD_function (r_opt, t_opt, e_opt, funcls), annot)) ->
-     DEF_fundef (FD_aux (FD_function (r_opt, t_opt, e_opt, List.map (map_funcl f) funcls), annot))
+  | DEF_fundef (FD_aux (FD_function (r_opt, t_opt, funcls), annot)) ->
+     DEF_fundef (FD_aux (FD_function (r_opt, t_opt, List.map (map_funcl f) funcls), annot))
   | def -> def
 
 let map_ast f ast = { ast with defs = List.map f ast.defs }
@@ -457,7 +461,7 @@ let rec rewrite_typ_nexp f (Typ_aux (t_aux, l)) =
   match t_aux with
   | Typ_id id -> rewrap (Typ_id id)
   | Typ_var kid -> rewrap (Typ_var kid)
-  | Typ_fn (arg_typs, ret_typ, eff) -> rewrap (Typ_fn (List.map (rewrite_typ_nexp f) arg_typs, rewrite_typ_nexp f ret_typ, eff))
+  | Typ_fn (arg_typs, ret_typ) -> rewrap (Typ_fn (List.map (rewrite_typ_nexp f) arg_typs, rewrite_typ_nexp f ret_typ))
   | Typ_tup typs -> rewrap (Typ_tup (List.map (rewrite_typ_nexp f) typs))
   | Typ_app (id, args) -> rewrap (Typ_app (id, List.map (rewrite_typ_arg_nexp f) args))
   | Typ_exist (kids, nc, typ) -> rewrap (Typ_exist (kids, nc, rewrite_typ_nexp f typ))

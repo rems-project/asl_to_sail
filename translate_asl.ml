@@ -1,12 +1,18 @@
-open Ast
-open Ast_defs
-open Ast_util
+open Libsail.Ast
+open Libsail.Ast_defs
+open Libsail.Ast_util
 open LibASL.Asl_ast
 open LibASL.Asl_utils
 
-module ASL_AST   = LibASL.Asl_ast
-module ASL_PP    = LibASL.Asl_parser_pp
-module ASL_TC    = LibASL.Tcheck
+module Type_check = Libsail.Type_check
+module Ast = Libsail.Ast
+module Ast_util = Libsail.Ast_util
+module Parse_ast = Libsail.Parse_ast
+module Util = Libsail.Util
+module Pattern_completeness = Libsail.Pattern_completeness
+module ASL_AST = LibASL.Asl_ast
+module ASL_PP = LibASL.Asl_parser_pp
+module ASL_TC = LibASL.Tcheck
 module ASL_Utils = LibASL.Asl_utils
 
 let opt_see_checks = ref true
@@ -87,7 +93,7 @@ module StringSet = Set.Make(String)
 
 module PC_config = struct
   type t = Type_check.tannot
-  let typ_of_pat = Type_check.typ_of_pat
+  let typ_of_t = Type_check.typ_of_tannot
 end
 
 module PC = Pattern_completeness.Make(PC_config);;
@@ -519,6 +525,15 @@ let rec has_setter_lexpr = function
   | LExpr_BitTuple les | LExpr_Tuple les ->
      List.exists has_setter_lexpr les
   | LExpr_Write _ | LExpr_ReadWrite _ -> true
+
+let rec has_wildcard_lexpr = function
+  | LExpr_Wildcard -> true
+  | LExpr_Array (le, _) | LExpr_Slices (le, _)
+  | LExpr_Field (le, _) | LExpr_Fields (le, _) ->
+     has_wildcard_lexpr le
+  | LExpr_BitTuple les | LExpr_Tuple les ->
+     List.exists has_wildcard_lexpr les
+  | _ -> false
 
 let pp_to_string doc =
   let b = Buffer.create 120 in
@@ -1448,8 +1463,7 @@ and sail_of_lexpr ctx (lexpr : ASL_AST.lexpr) =
      mk_lexp (LEXP_vector (recur le, sail_of_expr ctx e))
   | ASL_AST.LExpr_Write (f, _, args) ->
      mk_lexp (LEXP_memory (sail_id_of_ident f, List.map (sail_of_expr ctx) args))
-  | ASL_AST.LExpr_Wildcard ->
-     mk_lexp (LEXP_id (fresh_id "__ignore"))
+  | ASL_AST.LExpr_Wildcard
   | ASL_AST.LExpr_Slices (_, _)
   | ASL_AST.LExpr_ReadWrite (_, _, _, _) ->
      failwith ("sail_of_lexpr: " ^ pp_to_string (ASL_PP.pp_lexpr lexpr))
@@ -1640,8 +1654,10 @@ and sail_of_stmt ctx (stmt : ASL_AST.stmt) =
      let e' = mk_exp (E_app (mk_id "Bit", [sail_of_expr ctx e])) in
      mk_exp (E_assign (mk_lexp (LEXP_vector (mk_lexp (LEXP_id v'), idx')), e'))
   | ASL_AST.Stmt_Assign (LExpr_Tuple lexps, e, _)
-    when List.exists has_setter_lexpr lexps ->
+    when List.exists has_setter_lexpr lexps || List.exists has_wildcard_lexpr lexps ->
      sail_of_tuple_assignment ctx lexps e
+  | ASL_AST.Stmt_Assign (LExpr_Wildcard, e, _) ->
+     mk_exp (E_let (mk_letbind (mk_pat P_wild) (sail_of_expr ctx e), mk_exp (E_block [])))
   | ASL_AST.Stmt_Assign (le, e, _) ->
      mk_exp (E_assign (sail_of_lexpr ctx le, sail_of_expr ctx e))
   | ASL_AST.Stmt_FunReturn (e, _) ->
@@ -1994,12 +2010,12 @@ let sail_typschm_of_funtype ?ncs:(ncs=[]) ctx id ret_ty args =
     | ncs -> [mk_qi_nc (List.fold_left nc_and nc_true ncs)]
   in
   let tq = mk_typquant (quants @ nc_qis) in
-  mk_typschm tq (function_typ (implicit_typs @ arg_typs) ret_ty' no_effect)
+  mk_typschm tq (function_typ (implicit_typs @ arg_typs) ret_ty')
 
 let sail_valspec_of_decl ?ncs:(ncs=[]) ctx id ret_ty args =
   let id' = sail_id_of_ident id in
   let typschm = sail_typschm_of_funtype ~ncs:ncs ctx id ret_ty args in
-  [mk_val_spec (VS_val_spec (typschm, id', [], false))]
+  [mk_val_spec (VS_val_spec (typschm, id', None, false))]
 
 let sail_fundef_of_decl ?ncs:(ncs=[]) ctx id ret_ty args stmts =
   let id' = sail_id_of_ident id in
@@ -2260,11 +2276,11 @@ let initialise_vars (ics : int_constraint Bindings.t) stmts =
 
 let unknown_fun id typ =
   let fun_id = prepend_id "__UNKNOWN_" id in
-  let fun_typ = function_typ [unit_typ] typ no_effect in
+  let fun_typ = function_typ [unit_typ] typ in
   let typschm = mk_typschm (mk_typquant []) fun_typ in
   let pat = mk_pat (P_lit (mk_lit L_unit)) in
   let body = mk_lit_exp L_undef in
-  [mk_val_spec (VS_val_spec (typschm, fun_id, [], false));
+  [mk_val_spec (VS_val_spec (typschm, fun_id, None, false));
    mk_fundef [mk_funcl fun_id pat body]]
 
 let sail_of_declaration ctx (decl : ASL_AST.declaration) =
@@ -2310,14 +2326,12 @@ let sail_of_declaration ctx (decl : ASL_AST.declaration) =
   | Decl_Var (ty, id, l) ->
      let id' = sail_id_of_ident id in
      let ty' = sail_of_ty ctx ty in
-     let rreg = mk_effect [BE_rreg] in
-     let wreg = mk_effect [BE_wreg] in
-     [DEF_reg_dec (DEC_aux (DEC_reg (rreg, wreg, ty', id'), no_annot))]
+     [DEF_reg_dec (DEC_aux (DEC_reg (ty', id', None), no_annot))]
   | Decl_Config (ty, id, e, l) ->
      let id' = sail_id_of_ident id in
      let ty' = sail_of_ty ctx ty in
      let e' = sail_of_expr ctx e in
-     [DEF_reg_dec (DEC_aux (DEC_config (id', ty', e'), no_annot))]
+     [DEF_reg_dec (DEC_aux (DEC_reg (ty', id', Some e'), no_annot))]
   | Decl_Const (ty, id, e, l) ->
      let id' = sail_id_of_ident id in
      let (ty', tydef) =
