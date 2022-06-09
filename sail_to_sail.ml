@@ -222,6 +222,9 @@ let rec map_exp alg (E_aux (exp_aux, l)) =
   | E_case (exp, pexps) ->
      let exp_aux = E_case (map_exp alg exp, List.map (map_pexp alg) pexps) in
      alg.f_exp (rewrap exp_aux)
+  | E_var (lexp, exp, exp') ->
+     let exp_aux = E_var (map_lexp alg lexp, map_exp alg exp, map_exp alg exp') in
+     alg.f_exp (rewrap exp_aux)
   | E_let (letbind, exp) ->
      let exp_aux = E_let (map_letbind alg letbind, map_exp alg exp) in
      alg.f_exp (rewrap exp_aux)
@@ -694,7 +697,7 @@ let rec blocks (E_aux (aux, _) as exp) =
      blocks exp1 @ blocks exp2 @ blocks exp3
   | E_for (_, exp1, exp2, exp3, _, exp4) | E_vector_update_subrange (exp1, exp2, exp3, exp4) ->
      blocks exp1 @ blocks exp2 @ blocks exp3 @ blocks exp4
-  | E_cast (_, exp) | E_internal_return exp | E_exit exp | E_throw exp | E_field (exp, _) | E_return exp ->
+  | E_cast (_, exp) | E_internal_return exp | E_exit exp | E_throw exp | E_field (exp, _) | E_return exp | E_internal_assume (_, exp) ->
      blocks exp
   | E_assign (lexp, exp) ->
      blocks exp

@@ -5,4 +5,4 @@ FLG -w -32
 S sail/src
 S asl-interpreter
 B _build/**
-PKG num str unix uint zarith linksem lem yojson qcheck z3 asli.libASL sail
+PKG num str unix uint zarith linksem lem yojson qcheck z3 asli.libASL libsail
