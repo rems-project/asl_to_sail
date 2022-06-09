@@ -253,7 +253,7 @@ val HexStr = pure "hex_str" : int -> string
 val BoolStr : bool -> string
 function BoolStr b = match b { true => "true", false => "false" }
 
-val append_str = pure {ocaml: "concat_str", interpreter: "concat_str", lem: "stringAppend", c: "concat_str" } :
+val append_str = pure {ocaml: "concat_str", interpreter: "concat_str", lem: "stringAppend", c: "concat_str", coq: "String.append" } :
   (string, string) -> string
 
 function append_int(str: string, n: int) -> string = {
@@ -282,7 +282,8 @@ val putchar = pure {
   ocaml: "putchar",
   lem: "putchar",
   interpreter: "putchar",
-  c: "sail_putchar"
+  c: "sail_putchar",
+  coq: "putchar"
 } : int -> unit
 
 val __IMPDEF_boolean : string -> bool
