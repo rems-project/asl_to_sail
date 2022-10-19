@@ -30,6 +30,7 @@ let time (s : string) (f : 'a -> 'b) (x : 'a) : 'b =
 (* Command line flags *)
 
 let input_files = ref ([] : string list)
+let sail_lib_dir = ref ("" : string)
 let output_dir = ref (None : string option)
 let patch_dir = ref "patches"
 let write_osails = ref false
@@ -59,6 +60,9 @@ let read_overrides_file filename =
   close_in file
 
 let options = Arg.align ([
+  ( "-sail_lib_dir",
+    Arg.String (fun s -> sail_lib_dir := s),
+    " location of the Sail library directory");
   ( "-outdir",
     Arg.String (fun s -> output_dir := Some s),
     " set the output directory");
@@ -786,7 +790,7 @@ and convert_ast ?use_patches:(use_patches=true) ctx = function
            try
              let file = patch_file is_forward chunk in
              let _, parsed_ast = Initial_check.parse_file file in
-             let sail = Initial_check.process_ast (Parse_ast.Defs [(file, Preprocess.preprocess None [] parsed_ast)]) in
+             let sail = Initial_check.process_ast (Parse_ast.Defs [(file, Preprocess.preprocess !sail_lib_dir None [] parsed_ast)]) in
              sail
            with
            | Reporting.Fatal_error e ->
@@ -800,7 +804,7 @@ and convert_ast ?use_patches:(use_patches=true) ctx = function
              let (val_decls, decls) = List.partition is_val_decl decls in
              let file = patch_file true chunk in
              let _, parsed_ast = Initial_check.parse_file file in
-             let vals = Initial_check.process_ast (Parse_ast.Defs [(file, Preprocess.preprocess None [] parsed_ast)]) in
+             let vals = Initial_check.process_ast (Parse_ast.Defs [(file, Preprocess.preprocess !sail_lib_dir None [] parsed_ast)]) in
              let check_vals () = Type_check.check ctx.tc_env vals in
              let (_, env) = report_sail_error ctx val_decls vals check_vals (fun _ -> exit 1) in
              let ctx = { ctx with tc_env = env } in
@@ -961,7 +965,7 @@ let process_event_clauses (ctx : Translate_asl.ctx) decls =
 let process_sail_file ((ctx : Translate_asl.ctx), maps, events, clauses, previous_chunks, previous_files) filename =
   if not !quiet then print_endline ("Reading Sail file " ^ filename);
   let (ast, env, _) =
-    try Libsail.Frontend.load_files [] ctx.tc_env [filename] with
+    try Libsail.Frontend.load_files !sail_lib_dir [] ctx.tc_env [filename] with
     | Reporting.Fatal_error e -> Reporting.print_error e; exit 1
   in
   let previous_files' = previous_files @ [Sail_File (filename, ast)] in
@@ -1035,6 +1039,18 @@ let main () : unit =
   begin
     let input_arg file = input_files := !input_files @ [file] in
     Arg.parse options input_arg "ASL to Sail processor";
+
+    if String.compare !sail_lib_dir "" == 0 then
+      sail_lib_dir :=
+        let in_ch = Unix.open_process_in "opam var sail:share" in
+        let s = input_line in_ch in
+        match Unix.close_process_in in_ch with
+        | Unix.WEXITED 0 -> s
+        | Unix.WEXITED code ->
+           failwith ("Failed to find Sail library directory with opam (status " ^ string_of_int code ^ "), maybe use -sail_lib_dir?")
+        | Unix.WSIGNALED signal | Unix.WSTOPPED signal ->
+           failwith ("Failed to find Sail library directory with opam (" ^ string_of_int signal ^ "), maybe use -sail_lib_dir?")
+    else ();
 
     Reporting.opt_warnings := false;
     Constraint.load_digests ();
