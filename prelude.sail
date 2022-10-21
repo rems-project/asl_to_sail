@@ -94,7 +94,7 @@ val UInt0 = pure {
   coq: "uint"
 } : forall 'n. bits('n) -> {'m, 0 <= 'm < 2 ^ 'n. int('m)}
 
-val UInt1 : forall 'n. (int('n), bits('n)) -> {'m, 0 <= 'm < 2 ^ 'n. int('m)}
+val UInt1 = pure { coq: "uint" } : forall 'n. (int('n), bits('n)) -> {'m, 0 <= 'm < 2 ^ 'n. int('m)}
 function UInt1(n, x) = unsigned(x)
 
 overload UInt = {UInt0, UInt1}
