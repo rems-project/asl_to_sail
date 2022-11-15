@@ -60,7 +60,7 @@ val ediv_nat = pure {
   interpreter: "quotient",
   lem: "integerDiv",
   c: "ediv_int",
-  coq: "ediv_with_eq"
+  coq: "ZEuclid.div"
 } : forall 'n 'm, 'n >= 0 & 'm > 0. (int('n), int('m)) -> int(div('n, 'm))
 
 val emod_nat = pure {
@@ -68,7 +68,7 @@ val emod_nat = pure {
   interpreter: "modulus",
   lem: "integerMod",
   c: "emod_int",
-  coq: "emod_with_eq"
+  coq: "ZEuclid.modulo"
 } : forall 'n 'm, 'n >= 0 & 'm > 0. (int('n), int('m)) -> int(mod('n, 'm))
 
 // TODO
