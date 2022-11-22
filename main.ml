@@ -523,7 +523,7 @@ let rec get_unresolved_quants (err: Type_check.type_error) =
   match err with
   | Err_unresolved_quants (_, quants, locals, ncs) -> [(quants, locals, ncs)]
   | Err_failed_constraint (check, locals, ncs)
-  | Err_inner (Err_failed_constraint (check, locals, ncs), _, _, _) ->
+  | Err_inner (Err_failed_constraint (check, locals, ncs), _, _, _, _) ->
      [([mk_qi_nc check], locals, ncs)]
   | Err_no_casts (_, typ1, typ2, err', errs') ->
      begin match typ1, typ2 with
@@ -536,13 +536,13 @@ let rec get_unresolved_quants (err: Type_check.type_error) =
      end
   | Err_no_overloading (_, errs') ->
      List.concat (List.map (fun (_, err) -> get_unresolved_quants err) errs')
-  | Err_inner (err1, _, _, err2) ->
+  | Err_inner (err1, _, _, _, err2) ->
      get_unresolved_quants err1 @ get_unresolved_quants err2
-  | Err_subtype (typ1, typ2, ncs, _) ->
+  | Err_subtype (typ1, typ2, _, ncs, _) ->
      begin match destruct_numeric typ1, destruct_numeric typ2 with
        | Some ([], nc1, nexp1), Some ([], nc2, nexp2) ->
           let nc = nc_and (nc_eq nexp1 nexp2) (nc_and nc1 nc2) in
-          [([mk_qi_nc nc], Bindings.empty, ncs)]
+          [([mk_qi_nc nc], Bindings.empty, List.map snd ncs)]
        | _ -> []
      end
   | Err_no_num_ident _

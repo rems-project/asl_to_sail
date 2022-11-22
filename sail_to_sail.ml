@@ -518,7 +518,7 @@ let rewrite_int_select id defs =
             [mk_exp (E_let (lb, mk_exp (E_block exps)))]
             *)
          | Some ints ->
-            let existential = exist_typ (fun kid -> nc_set kid ints) (fun kid -> atom_typ (nvar kid)) in
+            let existential = exist_typ (exp_loc assignment) (fun kid -> nc_set kid ints) (fun kid -> atom_typ (nvar kid)) in
             let lb = mk_letbind (mk_pat (P_typ (existential, mk_pat (P_var (mk_pat (P_id id), mk_typ_pat (TP_var (kid_of_id id))))))) exp in
             [mk_exp (E_let (lb, mk_exp (E_block exps)))]
          | None -> assignment :: exps

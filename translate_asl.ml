@@ -1083,7 +1083,7 @@ let initial_exp_of_int_constraint = function
 
 let sail_intLits_type ints =
   let ints' = StringSet.of_list ints |> StringSet.elements |> List.map Big_int.of_string in
-  Type_check.exist_typ (fun kid -> nc_set kid ints') (fun kid -> atom_typ (nvar kid))
+  Type_check.exist_typ Unknown (fun kid -> nc_set kid ints') (fun kid -> atom_typ (nvar kid))
 
 let rec expr_of_pattern (pat : pattern) =
   match pat with
