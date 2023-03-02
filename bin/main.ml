@@ -20,6 +20,8 @@ module ASL_Utils = LibASL.Asl_utils
 module ASL_TC = LibASL.Tcheck
 module ASL_PP = LibASL.Asl_parser_pp
 module SS = Set.Make(String)
+module Translate_asl = Asl_to_sail.Translate_asl
+module Sail_to_sail = Asl_to_sail.Sail_to_sail
 
 let time (s : string) (f : 'a -> 'b) (x : 'a) : 'b =
   let t = Sys.time() in

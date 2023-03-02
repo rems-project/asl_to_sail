@@ -1,12 +1,8 @@
-BUILD = ocamlbuild -cflag -g -lflag -g -use-ocamlfind
+build:
+	dune build --release
 
-default:
-	$(BUILD) main.native
-	cp main.native asl_to_sail
-
-byte:
-	$(BUILD) main.byte
+install: build
+	dune install
 
 clean:
-	ocamlbuild -clean
-	rm -f asl_to_sail
+	dune clean

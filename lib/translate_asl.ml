@@ -369,7 +369,7 @@ let funcalls_in_types_of_stmts stmts =
   fcs#result
 
 let merge_bindings b1 b2 =
-  let merge _ x y = Some y in
+  let merge _ _ y = Some y in
   ASL_Utils.Bindings.union merge b1 b2
 
 let arg_of_ifield (IField_Field (id, _, wd)) =
@@ -463,7 +463,7 @@ let slice_vars_of_stmts stmts =
 
 (* We add type variables of functions that appear only in the return type
    as implicit arguments of the translated function in Sail. *)
-let ft_implicits ((_, _, tvs, _, atys, rty) : ASL_TC.funtype) =
+let ft_implicits ((_, _, _, _, atys, rty) : ASL_TC.funtype) =
   let arg_ids = IdentSet.of_list (List.map (fun (_, id) -> id) atys) in
   IdentSet.diff (fv_type rty) (IdentSet.union (fv_args atys) arg_ids)
 
@@ -1147,10 +1147,10 @@ let expr_is_intlit expr = (int_of_expr expr <> None)
 
 let width_of_slice (slice : ASL_AST.slice) =
   match slice with
-  | ASL_AST.Slice_Single e -> Expr_LitInt "1"
+  | ASL_AST.Slice_Single _ -> Expr_LitInt "1"
   | ASL_AST.Slice_HiLo (hi, lo) ->
      Expr_Binop (Expr_Binop (hi, Binop_Minus, lo), Binop_Plus, Expr_LitInt "1")
-  | ASL_AST.Slice_LoWd (lo, wd) -> wd
+  | ASL_AST.Slice_LoWd (_, wd) -> wd
 
 let slice_low_idx = function
   | Slice_Single lo
@@ -1247,7 +1247,7 @@ let rec sail_of_expr ctx (expr : ASL_AST.expr) =
      let f' = recur (Expr_Field (e, f)) in
      let fs' = recur (Expr_Fields (e, fs)) in
      mk_exp (E_vector_append (f', fs'))
-  | ASL_AST.Expr_Fields (e, []) ->
+  | ASL_AST.Expr_Fields (_, []) ->
      failwith ("sail_of_expr: Empty Expr_Fields")
   | ASL_AST.Expr_Slices (Expr_LitHex h, [slice])
     when slice_low_idx slice = Expr_LitInt "0" && const_width_slice slice ->
@@ -1313,7 +1313,7 @@ let rec sail_of_expr ctx (expr : ASL_AST.expr) =
   | ASL_AST.Expr_LitReal r -> mk_lit_exp (L_real r)
   | ASL_AST.Expr_LitBits b -> mk_lit_exp (L_bin (remove_spaces b))
   | ASL_AST.Expr_LitString s -> mk_lit_exp (L_string s)
-  | ASL_AST.Expr_In (e, ASL_AST.Pat_Set []) -> mk_lit_exp (L_false)
+  | ASL_AST.Expr_In (_, ASL_AST.Pat_Set []) -> mk_lit_exp (L_false)
   | ASL_AST.Expr_In (e, ASL_AST.Pat_Set [ASL_AST.Pat_Range (r1, r2)]) ->
      let e' = sail_of_expr ctx e in
      let r1' = sail_of_expr ctx r1 in
@@ -1628,7 +1628,7 @@ and sail_of_stmt ctx (stmt : ASL_AST.stmt) =
   | ASL_AST.Stmt_VarDecl (ty, id, e, _) ->
      let le = mk_lexp (LEXP_cast (sail_of_ty ctx ty, sail_id_of_ident id)) in
      mk_exp (E_assign (le, sail_of_expr ctx e))
-  | ASL_AST.Stmt_Assign ((ASL_AST.LExpr_BitTuple bits as le), e, _) ->
+  | ASL_AST.Stmt_Assign ((ASL_AST.LExpr_BitTuple _ as le), e, _) ->
      let e' = sail_of_expr ctx e in
      mk_exp (E_assign (sail_of_lexpr ctx le, e'))
   | ASL_AST.Stmt_Assign (LExpr_Write (f, targs, args), rhs, _) ->
@@ -1668,7 +1668,7 @@ and sail_of_stmt ctx (stmt : ASL_AST.stmt) =
        | None -> mk_lit_exp L_unit
      in
      mk_exp (E_return ret_val)
-  | ASL_AST.Stmt_Assert (e, l) ->
+  | ASL_AST.Stmt_Assert (e, _) ->
      mk_exp (E_assert (sail_of_expr ctx e, mk_lit_exp (L_string "")))
   | ASL_AST.Stmt_TCall (abort, _, [], _) when name_of_ident abort = "__abort" ->
      mk_exp (E_exit (mk_lit_exp L_unit))
@@ -1698,7 +1698,7 @@ and sail_of_stmt ctx (stmt : ASL_AST.stmt) =
               (* Remove bodies of cases so that type checking errors there
                * won't stop the pattern completeness check *)
               let strip_exp pexp =
-                let (pat, guard, exp, a) = destruct_pexp pexp in
+                let (pat, guard, _, a) = destruct_pexp pexp in
                 Ast_util.construct_pexp (pat, guard, sail_of_stmts ctx [], a)
               in
               let check alt = Type_check.check_case ctx.tc_env typ (strip_exp alt) unit_typ in
@@ -1709,7 +1709,7 @@ and sail_of_stmt ctx (stmt : ASL_AST.stmt) =
           if is_complete then [] else [mk_pexp (Pat_exp (mk_pat P_wild, sail_of_stmts ctx []))]
      in
      mk_exp (E_case (e', alts' @ otherwise'))
-  | ASL_AST.Stmt_For (var, start, dir, stop, stmts, l) ->
+  | ASL_AST.Stmt_For (var, start, dir, stop, stmts, _) ->
      let var' = sail_id_of_ident var in
      let start' = sail_of_expr ctx start in
      let dir' =
@@ -1722,12 +1722,12 @@ and sail_of_stmt ctx (stmt : ASL_AST.stmt) =
      let ctx' = share_locals (IdentSet.inter (fv_stmts stmts) (assigned_vars_of_stmts stmts)) ctx in
      let stmts' = sail_of_stmts ~force_block:true ctx' stmts in
      mk_exp (E_for (var', start', stop', step, dir', stmts'))
-  | ASL_AST.Stmt_While (e, stmts, l) ->
+  | ASL_AST.Stmt_While (e, stmts, _) ->
      let e' = sail_of_expr ctx e in
      let ctx' = share_locals (IdentSet.inter (fv_stmts stmts) (assigned_vars_of_stmts stmts)) ctx in
      let stmts' = sail_of_stmts ~force_block:true ctx' stmts in
      mk_exp (E_loop (While, measure_none, e', stmts'))
-  | ASL_AST.Stmt_Repeat (stmts, e, l) ->
+  | ASL_AST.Stmt_Repeat (stmts, e, _) ->
      let e' = sail_of_expr ctx e in
      let ctx' = share_locals (IdentSet.inter (fv_stmts stmts) (assigned_vars_of_stmts stmts)) ctx in
      let stmts' = sail_of_stmts ~force_block:true ctx' stmts in
@@ -1763,7 +1763,7 @@ and sail_of_stmt ctx (stmt : ASL_AST.stmt) =
      mk_exp (E_try (stmts', catchers' @ fallthrough'))
   | ASL_AST.Stmt_ExceptionTaken _ ->
      mk_exp (E_throw (mk_exp (E_app (mk_id "Error_ExceptionTaken", [mk_lit_exp L_unit]))))
-  | ASL_AST.Stmt_DecodeExecute (arch, instr, l) ->
+  | ASL_AST.Stmt_DecodeExecute (arch, instr, _) ->
      let decoder = prepend_id "Execute" (sail_id_of_ident arch) in
      mk_exp (E_app (decoder, [sail_of_expr ctx instr]))
   | ASL_AST.Stmt_VarDeclsNoInit (_, _, _)
@@ -1839,7 +1839,7 @@ and sail_block_of_stmts (ctx : ctx) (stmts : ASL_AST.stmt list) : unit exp list 
        :: sail_block_of_stmts ctx stmts
      else
        sail_letbind_stmts ctx (local_typ ctx id) id e' stmts
-  | ASL_AST.Stmt_ConstDecl (ty, id, e, l) :: stmts ->
+  | ASL_AST.Stmt_ConstDecl (ty, id, e, _) :: stmts ->
      let id' = sail_id_of_ident id in
      let pat =
        if ty = ASL_TC.type_integer then int_var_pat id' else
@@ -1888,7 +1888,7 @@ and sail_block_of_slice_assignments ctx lexp slices rhs l =
      :: sail_block_of_slice_assignments ctx lexp rest rhs l
   | [] -> []
 
-and sail_letbind_exp ctx (typ : typ) id bind exp =
+and sail_letbind_exp _ (typ : typ) id bind exp =
   let id' = sail_id_of_ident id in
   let pat =
     if typ = int_typ then int_var_pat id'
@@ -1957,7 +1957,7 @@ let constraints_of_fun id body =
     | Stmt_Assert (expr, _) :: stmts when IdentSet.subset (fv_expr expr) tvs ->
        let c = try [sail_n_constraint_of_expr empty_ctx expr] with _ -> [] in
        c @ constraints_of_stmts stmts
-    | Stmt_Assert (expr, _) :: stmts ->
+    | Stmt_Assert (_, _) :: stmts ->
        constraints_of_stmts stmts
     | _ -> []
   in
@@ -2025,7 +2025,7 @@ let sail_fundef_of_decl ?ncs:(ncs=[]) ctx id ret_ty args stmts =
   let arg_ids = IdentSet.of_list (List.map snd args) in
   (* ASL allows modification of function arguments, unlike Sail.
      Hence, we re-bind modified arguments as mutable variables. *)
-  let is_mutated (ty, v) = IdentSet.mem v (assigned_vars_of_stmts stmts) in
+  let is_mutated (_, v) = IdentSet.mem v (assigned_vars_of_stmts stmts) in
   let pat_of_arg (ty, v) =
     let v' = sail_id_of_ident v in
     mk_pat (P_id (if is_mutated (ty, v) then append_id v' "__arg" else v'))
@@ -2139,7 +2139,7 @@ let decoder_num = ref Big_int.zero
    TODO: Add back optional generation and use of an AST datatype
  *)
 let sail_decoder_clause ctx = function
-  | (ASL_AST.Encoding_Block (id, arch, fields, opcode, guard, unpreds, stmts, l)) ->
+  | (ASL_AST.Encoding_Block (id, arch, fields, opcode, guard, unpreds, _, _)) ->
      let (pat, pguard) = match opcode with
        | Opcode_Bits b -> sail_of_pat ctx (Pat_LitBits b)
        | Opcode_Mask m -> sail_of_pat ctx (Pat_LitMask m)
