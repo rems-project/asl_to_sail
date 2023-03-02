@@ -161,7 +161,7 @@ let svl_read_id = ASL_AST.FIdent("SVL.read", 0)
 let pl_read_id = ASL_AST.FIdent("PL.read", 0)
 let pl_of_vl_id = ASL_AST.Ident("PL_of_VL")
 
-let rec is_vl_read = function
+let is_vl_read = function
   | Expr_TApply (FIdent ("VL.read", _), _, _) -> Some "VL"
   | Expr_TApply (FIdent ("SVL.read", _), _, _) -> Some "SVL"
   | Expr_TApply (FIdent ("PL.read", _), _, _) -> Some "PL"
@@ -2195,7 +2195,7 @@ let sail_decoder_clause ctx = function
 
 let sail_of_encoding ctx opost exec_id vl_exprs exec_args conditional encoding =
   match encoding with
-  | (ASL_AST.Encoding_Block (id, arch, fields, opcode, guard, unpreds, stmts, l)) ->
+  | (ASL_AST.Encoding_Block (id, _arch, fields, _opcode, guard, _unpreds, stmts, l)) ->
      let decode_id = add_name_prefix "decode" id in
      let args = List.map arg_of_ifield fields in
      let post = Util.option_default [] opost in
@@ -2286,7 +2286,7 @@ let unknown_fun id typ =
 let sail_of_declaration ctx (decl : ASL_AST.declaration) =
   (* PPrint.ToChannel.pretty 1. 120 stderr (ASL_PP.pp_declaration decl); *)
   match decl with
-  | Decl_Record (id, fields, l) ->
+  | Decl_Record (id, fields, _) ->
      let id' = sail_type_id_of_ident id in
      let field' (ty, id) = (sail_of_ty ctx ty, sail_id_of_ident id) in
      let tvars = ASL_Utils.unionSets (List.map (fun (ty, _) -> ASL_Utils.fv_type ty) fields) in
@@ -2311,28 +2311,28 @@ let sail_of_declaration ctx (decl : ASL_AST.declaration) =
      let wreg = mk_effect [BE_wreg] in
      sail_bitfield_of_regtype ctx typ_id len fields ::
      [DEF_reg_dec (DEC_aux (DEC_reg (rreg, wreg, mk_id_typ typ_id, id'), no_annot))]*)
-  | Decl_Typedef (id, ty, l) ->
+  | Decl_Typedef (id, ty, _) ->
      let id' = sail_type_id_of_ident id in
      let ty' = sail_of_ty ctx ty in
      let kopts = kopts_of_vars ctx (ASL_Utils.fv_type ty) in
      let tq = mk_typquant (List.map mk_qi_kopt kopts) in
      [DEF_type (TD_aux (TD_abbrev (id', tq, arg_typ ty'), no_annot))]
      @ (if kopts = [] then unknown_fun id' ty' else [])
-  | Decl_Enum (id, ids, l) ->
+  | Decl_Enum (id, ids, _) ->
      let id' = sail_type_id_of_ident id in
      let ids' = List.map sail_id_of_ident ids in
      [DEF_type (TD_aux (TD_enum (id', ids', false), no_annot))]
      @ unknown_fun id' (mk_id_typ id')
-  | Decl_Var (ty, id, l) ->
+  | Decl_Var (ty, id, _) ->
      let id' = sail_id_of_ident id in
      let ty' = sail_of_ty ctx ty in
      [DEF_reg_dec (DEC_aux (DEC_reg (ty', id', None), no_annot))]
-  | Decl_Config (ty, id, e, l) ->
+  | Decl_Config (ty, id, e, _) ->
      let id' = sail_id_of_ident id in
      let ty' = sail_of_ty ctx ty in
      let e' = sail_of_expr ctx e in
      [DEF_reg_dec (DEC_aux (DEC_reg (ty', id', Some e'), no_annot))]
-  | Decl_Const (ty, id, e, l) ->
+  | Decl_Const (ty, id, e, _) ->
      let id' = sail_id_of_ident id in
      let (ty', tydef) =
        if ty = ASL_TC.type_integer then
@@ -2345,23 +2345,23 @@ let sail_of_declaration ctx (decl : ASL_AST.declaration) =
      in
      let pat = mk_pat (P_typ (ty', mk_pat (P_id id'))) in
      [DEF_val (mk_letbind pat (sail_of_expr ctx e))] @ tydef
-  | Decl_FunType (ret_ty, id, args, l)
-  | Decl_BuiltinFunction (ret_ty, id, args, l)
-  | Decl_ArrayGetterType (ret_ty, id, args, l) ->
+  | Decl_FunType (ret_ty, id, args, _)
+  | Decl_BuiltinFunction (ret_ty, id, args, _)
+  | Decl_ArrayGetterType (ret_ty, id, args, _) ->
      sail_valspec_of_decl ctx id ret_ty args
-  | Decl_ArrayGetterDefn (ret_ty, id, args, stmts, l) ->
+  | Decl_ArrayGetterDefn (ret_ty, id, args, stmts, _) ->
      sail_fundef_of_decl ctx id ret_ty args stmts
-  | Decl_VarGetterType (ty, id, l) ->
+  | Decl_VarGetterType (ty, id, _) ->
      sail_valspec_of_decl ctx id ty []
-  | Decl_VarGetterDefn (ty, id, stmts, l) ->
+  | Decl_VarGetterDefn (ty, id, stmts, _) ->
      sail_fundef_of_decl ctx id ty [] stmts
-  | Decl_VarSetterType (id, ty, arg, l) ->
+  | Decl_VarSetterType (id, ty, arg, _) ->
      sail_valspec_of_decl ctx id unit_ty [(ty, arg)]
-  | Decl_VarSetterDefn (id, ty, arg, stmts, l) ->
+  | Decl_VarSetterDefn (id, ty, arg, stmts, _) ->
      sail_fundef_of_decl ctx id unit_ty [(ty, arg)] stmts
-  | Decl_ProcType (id, args, l) ->
+  | Decl_ProcType (id, args, _) ->
      sail_valspec_of_decl ctx id unit_ty args
-  | Decl_ArraySetterType (id, args, ty, var, l) ->
+  | Decl_ArraySetterType (id, args, ty, var, _) ->
      let in_args = List.map arg_of_sformal args @ [(ty, var)] in
      let ret_tys = List.filter is_out_sformal args |> List.map arg_of_sformal |> List.map fst in
      let ret_ty =
@@ -2371,7 +2371,7 @@ let sail_of_declaration ctx (decl : ASL_AST.declaration) =
        | tys -> Type_Tuple tys
      in
      sail_valspec_of_decl ctx id ret_ty in_args
-  | Decl_ArraySetterDefn (id, args, ty, var, stmts, l) ->
+  | Decl_ArraySetterDefn (id, args, ty, var, stmts, _) ->
      let in_args = List.map arg_of_sformal args @ [(ty, var)] in
      let ret_tys = List.filter is_out_sformal args |> List.map arg_of_sformal |> List.map fst in
      let ret_ty =
@@ -2401,7 +2401,7 @@ let sail_of_declaration ctx (decl : ASL_AST.declaration) =
      sail_fundef_of_decl ctx id ret_ty args stmts
   | Decl_ProcDefn (id, args, stmts, _) ->
      sail_fundef_of_decl ctx id unit_ty args stmts
-  | Decl_InstructionDefn (id, encodings, opost, conditional, exec, l) ->
+  | Decl_InstructionDefn (id, encodings, opost, conditional, exec, _) ->
      let postbindings =
        match opost with
        | Some post -> locals_of_stmts post
@@ -2412,7 +2412,7 @@ let sail_of_declaration ctx (decl : ASL_AST.declaration) =
        |> List.fold_left merge_bindings postbindings
      in
      let exec_implicits = fv_stmts exec in
-     let exec_arg_needed id ty = IdentSet.mem id exec_implicits in
+     let exec_arg_needed id _ty = IdentSet.mem id exec_implicits in
      let exec_args =
        Bindings.filter exec_arg_needed bindings
        |> Bindings.bindings
@@ -2518,7 +2518,7 @@ let sail_of_maps ctx (decls: ASL_AST.declaration list) =
   in
   let mapdefs = List.fold_left add_mapdef ASL_Utils.Bindings.empty decls in
   let add_mapclause mapdefs = function
-    | Decl_MapClause (name, fields, guard, body, l) ->
+    | Decl_MapClause (name, fields, guard, body, _) ->
        let (ret_ty, args, clauses, fallthrough, l) =
          match ASL_Utils.Bindings.find_opt name mapdefs with
          | Some mapdef -> mapdef
@@ -2526,8 +2526,8 @@ let sail_of_maps ctx (decls: ASL_AST.declaration list) =
             let name' = ASL_AST.pprint_ident name in
             failwith ("sail_of_maps: Clause for undefined map " ^ name')
        in
-       let has_field_id id (MapField_Field (id', pat)) = (ASL_AST.Id.compare id id' = 0) in
-       let get_arg_pat (ty, id) =
+       let has_field_id id (MapField_Field (id', _pat)) = (ASL_AST.Id.compare id id' = 0) in
+       let get_arg_pat (_ty, id) =
          match List.find_opt (has_field_id id) fields with
          | Some (MapField_Field (_, pat)) -> sail_of_pat ctx pat
          | None -> (mk_pat (P_id (sail_id_of_ident id)), None)
@@ -2551,7 +2551,7 @@ let sail_of_maps ctx (decls: ASL_AST.declaration list) =
     | _ -> mapdefs
   in
   let mapdefs' = List.fold_left add_mapclause mapdefs decls in
-  let sail_of_mapdef (name, (ret_ty, args, clauses, fallthrough, l)) =
+  let sail_of_mapdef (name, (_ret_ty, args, clauses, fallthrough, _l)) =
     let name' = sail_id_of_ident name in
     let fallthrough' = sail_of_stmts ctx fallthrough in
     let arg_pat (_, id) = mk_pat (P_id (sail_id_of_ident id)) in
@@ -2571,9 +2571,9 @@ let ast_of_maps ctx decls = { empty_ast with defs = sail_of_maps ctx decls }
 
 let sail_of_events ctx (decls: ASL_AST.declaration list) =
   let add_event evs = function
-    | Decl_NewEventDefn (id, args, l) ->
+    | Decl_NewEventDefn (id, args, _) ->
        ASL_Utils.Bindings.add id (args, []) evs
-    | Decl_EventClause (id, stmts', l) ->
+    | Decl_EventClause (id, stmts', _) ->
        let (args, stmts) =
          match ASL_Utils.Bindings.find_opt id evs with
          | Some ev -> ev

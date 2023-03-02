@@ -1,4 +1,3 @@
 (library
  (name asl_to_sail)
- (flags (:standard -w -27 -w -39))
  (libraries libsail asli.libASL))

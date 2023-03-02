@@ -194,14 +194,14 @@ let is_clause_decl = function
   | Decl_MapClause (_, _, _, _, _) -> true
   | _ -> false
 
-let is_var_decl = function
+(*let is_var_decl = function
   | Decl_Var (_, _, _)
   | Decl_Config (_, _, _, _) -> true
   | _ -> false
 
 let is_const_decl = function
   | Decl_Const (_, _, _, _) -> true
-  | _ -> false
+  | _ -> false*)
 
 let is_type_decl = function
   | Decl_BuiltinType (_, _)
@@ -326,7 +326,7 @@ let termcode n = "\x1B[" ^ string_of_int n ^ "m"
 let bold str = termcode 1 ^ termcode 33 ^ str ^ termcode 0
 let emph str = termcode 1 ^ termcode 35 ^ str ^ termcode 0
 let green str = termcode 1 ^ termcode 32 ^ str ^ termcode 0
-let red str = termcode 1 ^ termcode 31 ^ str ^ termcode 0
+(* let red str = termcode 1 ^ termcode 31 ^ str ^ termcode 0 *)
 
 let is_valspec = function
   | Ast.DEF_spec _ -> true
@@ -469,7 +469,7 @@ let get_chunks ?previous_chunks:(pc=StringMap.empty) decls =
   |> List.filter (fun c -> not (is_empty_chunk c))
 
 let rec merge_encodings = function
-  | (Decl_InstructionDefn (id, encs, opost, cond, exec, l) as decl) :: decls ->
+  | (Decl_InstructionDefn (id, _, _, _, _, _) as decl) :: decls ->
      (* Check for other instructions with same identifier and execute clause and
         merge encodings *)
      let pp_stmts = List.map ASL_Utils.pp_stmt in
@@ -477,7 +477,7 @@ let rec merge_encodings = function
      let ostmts_eq s1 s2 = stmts_eq (Util.option_default [] s1) (Util.option_default [] s2) in
      let merge i1 i2 = match (i1, i2) with
        | (Decl_InstructionDefn (id1, encs1, opost1, cond1, exec1, l1),
-          Decl_InstructionDefn (id2, encs2, opost2, cond2, exec2, l2))
+          Decl_InstructionDefn (id2, encs2, opost2, cond2, exec2, _))
          when ASL_AST.Id.compare id1 id2 = 0 && ostmts_eq opost1 opost2 && cond1 = cond2
            && stmts_eq exec1 exec2 ->
           Decl_InstructionDefn (id1, encs1 @ encs2, opost1, cond1, exec1, l1)
@@ -583,53 +583,9 @@ let is_duplicate_val_spec (ctx : Translate_asl.ctx) = function
      end
   | _ -> false
 
-(* Get effects that the type checker has inferred for a function
-
-   TODO Handle mutually recursive functions *)
-let get_fundef_effs def =
-  let open Ast in
-  match def with
-  | DEF_fundef (FD_aux (FD_function (_, _, funcls), _)) ->
-     let add_funcl_effs effs' (FCL_aux (FCL_Funcl (_, pexp), _)) =
-       let (_, guard, exp, _) = destruct_pexp pexp in
-       let guard_effs = match guard with
-         | Some g -> Type_check.effect_of g
-         | None -> no_effect
-       in
-       union_effects effs' (union_effects guard_effs (Type_check.effect_of exp))
-     in
-     List.fold_left add_funcl_effs no_effect funcls
-  | _ -> no_effect
-
 let get_fundef_id = function
   | Ast.DEF_fundef fd -> [id_of_fundef fd]
   | _ -> []
-
-(*let add_effects effs env id =
-  match Type_check.Env.get_val_spec_orig id env with
-  | (tq, Ast.Typ_aux (Ast.Typ_fn (args, ret), l)) ->
-    let typ' = Ast.Typ_aux (Ast.Typ_fn (args, ret, effs), l) in
-    Type_check.Env.update_val_spec id (tq, typ') env
-  | _ -> env
-  | exception _ -> env
-
-let update_effects env def =
-  match def with
-  | Ast.DEF_spec (VS_aux (VS_val_spec (typschm, id, eo, ic), a)) ->
-     let open Ast in
-     begin match typschm with
-       | TypSchm_aux (TypSchm_ts (tq, Typ_aux (Typ_fn (args, ret, _), l)), l') ->
-          begin match Type_check.Env.get_val_spec_orig id env with
-          | (_, Ast.Typ_aux (Ast.Typ_fn (_, _, effs), _)) ->
-             let typ' = Ast.Typ_aux (Ast.Typ_fn (args, ret, effs), l) in
-             let typschm' = TypSchm_aux (TypSchm_ts (tq, typ'), l') in
-             DEF_spec (VS_aux (VS_val_spec (typschm', id, eo, ic), a))
-          | _ -> def
-          | exception _ -> def
-          end
-       | _ -> def
-     end
-  | _ -> def*)
 
 let report_sail_error (ctx: Translate_asl.ctx) decls sail convert continue =
   try convert ()
@@ -643,7 +599,7 @@ let report_sail_error (ctx: Translate_asl.ctx) decls sail convert continue =
      Type_check.opt_tc_debug := 1;
      let _, _ =
        try Type_error.check ctx.tc_env sail with
-       | Reporting.Fatal_error e -> empty_ast, ctx.tc_env
+       | Reporting.Fatal_error _ -> empty_ast, ctx.tc_env
      in
      Type_check.opt_tc_debug := 0;
      print_endline (bold "\nReason:");
@@ -656,14 +612,12 @@ let report_sail_error (ctx: Translate_asl.ctx) decls sail convert continue =
      Reporting.print_error e;
      exit 1
 
-let type_error_eq err1 err2 =
-  Type_error.string_of_type_error err1 = Type_error.string_of_type_error err2
-
 let quant_error_eq (quants1, _, _) (quants2, _, _) =
   String.concat ", " (List.map string_of_quant_item quants1)
   = String.concat ", " (List.map string_of_quant_item quants2)
 
-let merge_quant_errs env ((quants1, locals1, ncs1) as err1) ((quants2, locals2, ncs2) as err2) =
+let merge_quant_errs env ((quants1, _locals1, _ncs1) as err1) ((quants2, _locals2, _ncs2) as err2) =
+  (* TODO: Handle locals/ncs? *)
   let open Type_check in
   (* If the errors are equal, return one of them *)
   if quant_error_eq err1 err2 then Some err1 else
@@ -745,7 +699,7 @@ and iterate_check n env sail =
                try
                  Sail_to_sail.rewrite_add_constraint l env env' nc ncs sail
                with
-               | Type_error (_, l, err) ->
+               | Type_error (_, _, err) ->
                   prerr_endline Util.(Type_error.string_of_type_error err |> red |> clear);
                   sail
                | Failure msg ->
@@ -848,12 +802,6 @@ and convert_ast ?use_patches:(use_patches=true) ctx = function
             let sail = Sail_to_sail.rewrite_make_unique sail in
             let checked_sail, sail, env = iterate_check 0 ctx.tc_env sail in
 
-            (* Add effects *)
-            (*let fun_effs =
-              List.map get_fundef_effs checked_sail.defs
-              |> List.fold_left union_effects no_effect
-            in
-            let env = List.fold_left (add_effects fun_effs) env fun_ids in*)
             let fun_ids = List.concat (List.map get_fundef_id checked_sail.defs) in
 
             (* The lexer/parser and initial check have side-effects we
@@ -916,7 +864,7 @@ let process_asl_file ((ctx : Translate_asl.ctx), maps, events, clauses, previous
   in
   let decls = List.filter (fun d -> not (overridden d)) decls in
 
-  let (builtins, decls) = List.partition is_sail_builtin_decl decls in
+  let (_builtins, decls) = List.partition is_sail_builtin_decl decls in
   let (op_decls, decls) = List.partition is_operator_decl decls in
   let (clauses', decls) = List.partition is_clause_decl decls in
   let (maps', decls) = List.partition is_map_decl decls in
@@ -951,7 +899,7 @@ let process_map_clauses (ctx : Translate_asl.ctx) decls =
   report_sail_error ctx decls ast
     (fun _ ->
        let ast = Sail_to_sail.rewrite_make_unique ast in
-       let (checked_ast, ast, env) = iterate_check 0 ctx.tc_env ast in
+       let (checked_ast, ast, _env) = iterate_check 0 ctx.tc_env ast in
        ASL_File ("map_clauses.asl", decls, checked_ast, ast))
     (fun _ -> exit 1)
 
@@ -960,7 +908,7 @@ let process_event_clauses (ctx : Translate_asl.ctx) decls =
   report_sail_error ctx decls ast
     (fun _ ->
        let ast = Sail_to_sail.rewrite_make_unique ast in
-       let (checked_ast, ast, env) = iterate_check 0 ctx.tc_env ast in
+       let (checked_ast, ast, _env) = iterate_check 0 ctx.tc_env ast in
        ASL_File ("event_clauses.asl", decls, checked_ast, ast))
     (fun _ -> exit 1)
 
@@ -1030,7 +978,7 @@ let generate_stubs ctx processed_files =
       let chunks = List.map (fun decl -> Chunk_decls [decl]) stubs in
       let quiet_orig = !quiet in
       quiet := true;
-      let (checked_ast, ast, ctx) = convert_ast ~use_patches:false ctx chunks in
+      let (checked_ast, ast, _ctx) = convert_ast ~use_patches:false ctx chunks in
       quiet := quiet_orig;
       [ASL_File ("stubs.asl", stubs, checked_ast, ast)]
     end else []
@@ -1090,7 +1038,7 @@ let () =
     ()
   else
     try main () with
-    | Type_check.Type_error (_, l, err) ->
+    | Type_check.Type_error (_, _, err) ->
        prerr_endline "Unhandled type error!";
        prerr_endline (Type_error.string_of_type_error err);
        Printexc.print_backtrace stderr;

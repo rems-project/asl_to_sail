@@ -26,7 +26,7 @@ let is_overload = function
 let id_append id str =
   match id with
   | Id_aux (Id v, l) -> Id_aux (Id (v ^ "__" ^ str), l)
-  | Id_aux (Operator v, l) -> failwith "Cannot append to infix id"
+  | Id_aux (Operator _, _) -> failwith "Cannot append to infix id"
 
 let rename_funcl f (FCL_aux (FCL_Funcl (id, pexp), annot)) =
   FCL_aux (FCL_Funcl (f id, pexp), annot)
@@ -36,14 +36,14 @@ let rename_fundef f (FD_aux (FD_function (r_opt, t_opt, funcls), annot)) =
 
 let rec rename_fundefs n = function
   | (DEF_fundef fdef :: defs) -> DEF_fundef (rename_fundef (fun id -> id_append id (string_of_int n)) fdef) :: rename_fundefs (n + 1) defs
-  | def :: defs -> rename_fundefs n defs
+  | def :: defs -> def :: rename_fundefs n defs
   | [] -> []
 
 let rename_valspec_aux f (VS_val_spec (typschm, id, ext, is_cast)) = VS_val_spec (typschm, f id, ext, is_cast)
 
 let rename_valspec f (VS_aux (vs_aux, annot)) = VS_aux (rename_valspec_aux f vs_aux, annot)
 
-let valspec_id (VS_aux (VS_val_spec (_, id, _, _), annot)) = id
+let valspec_id (VS_aux (VS_val_spec (_, id, _, _), _)) = id
 
 let valspec_of_def = function
   | DEF_spec vs -> vs
@@ -51,7 +51,7 @@ let valspec_of_def = function
 
 let rec rename_valspecs n = function
   | (DEF_spec vs :: defs) -> DEF_spec (rename_valspec (fun id -> id_append id (string_of_int n)) vs) :: rename_valspecs (n + 1) defs
-  | def :: defs -> rename_valspecs n defs
+  | def :: defs -> def :: rename_valspecs n defs
   | [] -> []
 
 (*let same_effects valspecs =
@@ -331,7 +331,7 @@ let rec lexp_bindings (LEXP_aux (l_aux, _)) =
 
 let exp_lexp_bindings exp =
   let ids = ref IdSet.empty in
-  let collect_lexps (E_aux (e_aux, l) as exp) =
+  let collect_lexps (E_aux (e_aux, _) as exp) =
     match e_aux with
     | E_assign (lexp, _) -> ids := IdSet.union !ids (lexp_bindings lexp); exp
     | _ -> exp
@@ -364,7 +364,7 @@ let exp_pat_bindings exp =
 
 let exp_ids exp =
   let ids = ref IdSet.empty in
-  let collect_id (E_aux (e_aux, l) as exp) =
+  let collect_id (E_aux (e_aux, _) as exp) =
     match e_aux with
     | E_id id -> (ids := IdSet.add id !ids; exp)
     | _ -> exp
@@ -430,7 +430,7 @@ let map_valspec_typschm f (VS_aux (VS_val_spec (typschm, id, ext, is_cast), l)) 
 let find_pat_index id pats =
   let rec find_pat_index' n id = function
     | [] -> raise Not_found
-    | (P_aux (P_id id', _) :: pats) when Id.compare id id' == 0 -> n
+    | (P_aux (P_id id', _) :: _) when Id.compare id id' == 0 -> n
     | (_ :: pats) -> find_pat_index' (n + 1) id pats
   in
   find_pat_index' 0 id pats
@@ -442,7 +442,7 @@ let typq_append typq qis =
 
 let rec replace n y = function
   | [] -> []
-  | (x :: xs) when n == 0 -> y :: xs
+  | (_ :: xs) when n == 0 -> y :: xs
   | (x :: xs) -> x :: replace (n - 1) y xs
 
 let rec rewrite_nexp_id id nexp (Nexp_aux (n_aux, l)) =
@@ -497,9 +497,9 @@ and rewrite_nconstraint_nexp f (NC_aux (nc_aux, l)) =
 (* Rewriting datasize variables in the decode functions *)
 
 let int_leaves exp =
-  let rec ints (E_aux (e_aux, l)) =
+  let rec ints (E_aux (e_aux, _)) =
     match e_aux with
-    | E_if (exp1, exp2, exp3) -> ints exp2 @ ints exp3
+    | E_if (_exp1, exp2, exp3) -> ints exp2 @ ints exp3
     | E_lit (L_aux (L_num n, _)) -> [n]
     | _ -> raise Exit
   in
@@ -536,7 +536,7 @@ let rewrite_int_select id defs =
   map_fundefs (map_funcl_exps map_exps) defs
 
 let rewrite_pointless_block_return defs =
-  let rec rewrite_block = function
+  let rewrite_block = function
     | (E_aux (E_assign _, _) as assignment)
       :: E_aux (E_return (E_aux (E_lit (L_aux (L_unit, _)), _)), _)
       :: [] ->
@@ -560,7 +560,7 @@ let rec is_undefined (E_aux (aux, _)) =
   | E_cast (_, exp) -> is_undefined exp
   | _ -> false
 
-let rec lexp_id (LEXP_aux (aux, _)) =
+let lexp_id (LEXP_aux (aux, _)) =
   match aux with
   | LEXP_cast (_, id) -> Some id
   | LEXP_id id -> Some id
@@ -570,7 +570,7 @@ let eventually_constant defs =
   let rec is_assigning_exp id (E_aux (aux, _)) =
     match aux with
     | E_block exps -> List.exists (is_assigning_exp id) exps
-    | E_assign (lexp, rexp) ->
+    | E_assign (lexp, _) ->
        begin match lexp_id lexp with
        | Some id' -> Id.compare id id' = 0
        | None -> false
@@ -699,18 +699,18 @@ let rec blocks (E_aux (aux, _) as exp) =
      blocks exp1 @ blocks exp2 @ blocks exp3 @ blocks exp4
   | E_cast (_, exp) | E_internal_return exp | E_exit exp | E_throw exp | E_field (exp, _) | E_return exp | E_internal_assume (_, exp) ->
      blocks exp
-  | E_assign (lexp, exp) ->
+  | E_assign (_, exp) ->
      blocks exp
   | E_let (lb, exp) ->
      letbind_blocks lb @ blocks exp
   | E_case (exp, cases) | E_try (exp, cases) ->
      blocks exp @ List.concat (List.map pexp_blocks cases)
-  | E_var (lexp, exp1, exp2) ->
+  | E_var (_, exp1, exp2) ->
      blocks exp1 @ blocks exp2
   | E_id _ | E_lit _ | E_internal_value _ | E_constraint _ | E_ref _ | E_sizeof _ ->
      []
   | E_record _ | E_record_update _ -> []
-and letbind_blocks (LB_aux (LB_val (pat, exp), _)) = blocks exp
+and letbind_blocks (LB_aux (LB_val (_, exp), _)) = blocks exp
 and pexp_blocks (Pat_aux (aux, _)) =
   match aux with
   | Pat_exp (_, exp) -> blocks exp
@@ -744,7 +744,7 @@ exception Not_top_level of n_constraint;;
 let rewrite_add_constraint l env env_l nc local_ncs ast =
   (* prerr_endline "Calling rewrite_add_constraint"; *)
   match l with
-  | Parse_ast.Unique (n, l) ->
+  | Parse_ast.Unique (n, _) ->
      let insert_into_funbody nc =
        let assertion = mk_exp (E_assert (mk_exp (E_constraint nc), mk_lit_exp (L_string ""))) in
        insert_into_block n assertion ast;
@@ -756,8 +756,8 @@ let rewrite_add_constraint l env env_l nc local_ncs ast =
 
      begin match !function_id with
      | Some id ->
-        let add_constraint id (TypSchm_aux (TypSchm_ts (typq, typ), tq_l)) =
-          let kopts, ncs = quant_split typq in
+        let add_constraint _id (TypSchm_aux (TypSchm_ts (typq, typ), tq_l)) =
+          let kopts, _ncs = quant_split typq in
           let conjs = constraint_conj (constraint_simp nc) in
           let open Type_check in
           (* We want to remove any conjunct in the constraint we are

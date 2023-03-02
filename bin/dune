@@ -1,7 +1,6 @@
 (executable
  (public_name asl_to_sail)
  (name main)
- (flags (:standard -w -27 -w -39 -w -32))
  (libraries asl_to_sail))
 
 (install
