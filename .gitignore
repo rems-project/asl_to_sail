@@ -2,4 +2,5 @@
 .*.un~
 _build
 *.native
+*.install
 asl_to_sail
