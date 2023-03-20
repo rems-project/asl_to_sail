@@ -854,6 +854,12 @@ let process_asl_file ((ctx : Translate_asl.ctx), maps, events, clauses, previous
     |> List.map impdef_decl |> List.concat
   in
 
+  let bitfields =
+    Translate_asl.bitfields_of_decls decls
+    |> Libsail.Ast_util.Bindings.union (fun _ x _ -> Some x) ctx.bitfields
+  in
+  let ctx = { ctx with bitfields } in
+
   (* Filter out overridden functions that should be taken from other files *)
   let overriden_funs =
     List.filter (fun (_, f) -> f <> Filename.basename filename) !overrides
