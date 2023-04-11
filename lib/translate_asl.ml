@@ -97,20 +97,6 @@ let empty_ctx = {
 
 module StringSet = Set.Make(String)
 
-module PC_config = struct
-  type t = Type_check.tannot
-  let typ_of_t = Type_check.typ_of_tannot
-end
-
-module PC = Pattern_completeness.Make(PC_config);;
-
-let pats_complete l env ps typ =
-  let ctx = {
-      Pattern_completeness.variants = Type_check.Env.get_variants env;
-      Pattern_completeness.enums = Type_check.Env.get_enums env
-    } in
-  PC.is_complete l ctx ps typ
-
 let builtins = StringSet.of_list [
   "eq_enum"; "ne_enum";
   "Min"; "Max"; "Abs";
@@ -125,7 +111,7 @@ let builtins = StringSet.of_list [
 let mono_splits = ref (Bindings.empty : (ident list) Bindings.t)
 
 let get_mono_splits id =
-  Util.option_default [] (Bindings.find_opt id !mono_splits)
+  Option.value ~default:[] (Bindings.find_opt id !mono_splits)
 
 let read_mono_splits_file filename =
   let file = open_in filename in
@@ -407,7 +393,7 @@ let get_asl_funtype (id : ident) : ASL_TC.funtype option =
   let fts = ASL_TC.GlobalEnv.getFuns ASL_TC.env0 (stripTag id) in
   match List.find_opt (fun ft -> Id.compare (ASL_TC.ft_id ft) id = 0) fts with
   | Some ft -> Some ft
-  | None -> Util.option_map ASL_TC.funtype_of_sfuntype (get_asl_sfuntype id)
+  | None -> Option.map ASL_TC.funtype_of_sfuntype (get_asl_sfuntype id)
 
 let instantiate_fun_ret_typ (id : ASL_AST.ident) (tes : ASL_AST.expr list) =
   match get_asl_funtype id with
@@ -1261,7 +1247,7 @@ let rec coerce_exp env src_typ dst_typ e =
        try
          let e1' = Type_check.infer_exp env e1 in
          (Type_check.assert_constraint env true e1',
-          Util.option_map nc_not (Type_check.assert_constraint env false e1'))
+          Option.map nc_not (Type_check.assert_constraint env false e1'))
        with _ -> (None, None)
      in
      let e2' = coerce_exp (add_opt_constraint then_constr env) src_typ dst_typ e2 in
@@ -1443,13 +1429,13 @@ let rec sail_of_expr ctx (expr : ASL_AST.expr) =
   | ASL_AST.Expr_Unknown (Type_Bits n) ->
      mk_exp (E_app (mk_id "__UNKNOWN_bits", [recur n]))
   | ASL_AST.Expr_Unknown ty ->
-     mk_exp (E_cast (sail_of_ty ctx ty, mk_lit_exp L_undef))
+     mk_exp (E_typ (sail_of_ty ctx ty, mk_lit_exp L_undef))
   | ASL_AST.Expr_ImpDef (ASL_AST.Type_Constructor tid, s) ->
-     let s' = mk_lit_exp (L_string (Util.option_default "" s)) in
+     let s' = mk_lit_exp (L_string (Option.value ~default:"" s)) in
      let f = prepend_id "__IMPDEF_" (sail_id_of_ident tid) in
      mk_exp (E_app (f, [s']))
   | ASL_AST.Expr_ImpDef (ASL_AST.Type_Bits n, s) ->
-     let s' = mk_lit_exp (L_string (Util.option_default "" s)) in
+     let s' = mk_lit_exp (L_string (Option.value ~default:"" s)) in
      mk_exp (E_app (mk_id "__IMPDEF_bits", [recur n; s']))
   (* | ASL_AST.Expr_TApply (f, _, [])
     when ASL_Utils.Bindings.mem f ctx.bound_tvars ->
@@ -1494,7 +1480,7 @@ let rec sail_of_expr ctx (expr : ASL_AST.expr) =
        List.map (fun p -> construct_pexp (sail_of_pat ctx p) (mk_lit_exp L_true)) pats @
        [mk_pexp (Pat_exp (mk_pat P_wild, mk_lit_exp L_false))]
      in
-     mk_exp (E_cast (bool_typ, mk_exp (E_case (recur e, clauses))))
+     mk_exp (E_typ (bool_typ, mk_exp (E_match (recur e, clauses))))
   | ASL_AST.Expr_Unop (_, _)
   | ASL_AST.Expr_Slices (_, _)
   | ASL_AST.Expr_ImpDef (_, _)
@@ -1537,11 +1523,11 @@ and sail_slice_exps (ctx : ctx) (slice : ASL_AST.slice) =
   in
   if lowd then
     ((fun e -> mk_exp (E_app (mk_id "Slice", [e; i1'; i2']))),
-    ((fun le -> mk_lexp (LEXP_vector_range (le, i12', i1'))),
+    ((fun le -> mk_lexp (LE_vector_range (le, i12', i1'))),
      (fun e e' -> mk_exp (E_app (mk_id "SetSlice", [i2'; e; i1'; e'])))))
   else
     ((fun e -> mk_exp (E_vector_subrange (e, i1', i2'))),
-    ((fun le -> mk_lexp (LEXP_vector_range (le, i1', i2'))),
+    ((fun le -> mk_lexp (LE_vector_range (le, i1', i2'))),
      (fun e e' -> mk_exp (E_vector_update_subrange (e, i1', i2', e')))))
 and sail_slice_exp ctx slice = fst (sail_slice_exps ctx slice)
 and sail_slice_lexp ctx slice = fst (snd (sail_slice_exps ctx slice))
@@ -1618,7 +1604,7 @@ and sail_of_lexpr ctx (lexpr : ASL_AST.lexpr) =
   let recur = sail_of_lexpr ctx in
   match lexpr with
   | ASL_AST.LExpr_Var v ->
-     mk_lexp (LEXP_id (sail_id_of_ident v))
+     mk_lexp (LE_id (sail_id_of_ident v))
   | ASL_AST.LExpr_Slices (le, [slice]) ->
      let le' = match infer_sail_lexpr_typ ctx le with
        | Some typ when is_bitfield_typ ctx.tc_env typ ->
@@ -1628,35 +1614,35 @@ and sail_of_lexpr ctx (lexpr : ASL_AST.lexpr) =
      sail_slice_lexp ctx slice le'
   | ASL_AST.LExpr_Slices (le, ((_ :: _) as slices)) ->
      let slices' = List.map (fun s -> recur (ASL_AST.LExpr_Slices (le, [s]))) slices in
-     mk_lexp (LEXP_vector_concat slices')
+     mk_lexp (LE_vector_concat slices')
   | ASL_AST.LExpr_Field (le, f) ->
      begin match infer_sail_lexpr_typ ctx le with
      | Some typ when is_bitfield_typ ctx.tc_env typ ->
         let f' = sail_id_of_ident f in
         let typ_id = Option.get (get_typ_id ctx.tc_env typ) in
         if has_sail_bitfield ctx typ_id f' then
-          mk_lexp (LEXP_vector (recur le, mk_exp (E_id f')))
+          mk_lexp (LE_vector (recur le, mk_exp (E_id f')))
         else begin match get_bitfield_slices ctx typ_id f' with
           | Some [slice] ->
              let le' = Libsail.Bitfield.set_bits_field_lexp (recur le) in
              sail_slice_lexp ctx slice le'
           | Some slices -> failwith ("unsupported bitfield type in lexp " ^ pp_lexpr lexpr ^ " : " ^ pp_to_string (pp_slices slices))
-          | None -> mk_lexp (LEXP_vector (recur le, mk_exp (E_id f')))
+          | None -> mk_lexp (LE_vector (recur le, mk_exp (E_id f')))
         end
      | _ ->
-        mk_lexp (LEXP_field (recur le, sail_id_of_ident f))
+        mk_lexp (LE_field (recur le, sail_id_of_ident f))
      end
   | ASL_AST.LExpr_Fields (le, fs) ->
      let fs' = List.map (fun f -> recur (ASL_AST.LExpr_Field (le, f))) fs in
-     mk_lexp (LEXP_vector_concat fs')
+     mk_lexp (LE_vector_concat fs')
   | ASL_AST.LExpr_Tuple les ->
-     mk_lexp (LEXP_tup (List.map recur les))
+     mk_lexp (LE_tuple (List.map recur les))
   | ASL_AST.LExpr_BitTuple les ->
-     mk_lexp (LEXP_vector_concat (List.map recur les))
+     mk_lexp (LE_vector_concat (List.map recur les))
   | ASL_AST.LExpr_Array (le, e) ->
-     mk_lexp (LEXP_vector (recur le, sail_of_expr ctx e))
+     mk_lexp (LE_vector (recur le, sail_of_expr ctx e))
   | ASL_AST.LExpr_Write (f, _, args) ->
-     mk_lexp (LEXP_memory (sail_id_of_ident f, List.map (sail_of_expr ctx) args))
+     mk_lexp (LE_app (sail_id_of_ident f, List.map (sail_of_expr ctx) args))
   | ASL_AST.LExpr_Wildcard
   | ASL_AST.LExpr_Slices (_, _)
   | ASL_AST.LExpr_ReadWrite (_, _, _, _) ->
@@ -1676,14 +1662,14 @@ and sail_of_setter_assignment ctx f targs args rhs =
        | (Formal_In _, _) -> []
      in
      begin match List.concat (List.map formal_lexp (List.combine formals args)) with
-       | [] -> mk_exp (E_assign (mk_lexp (LEXP_memory (f', args')), rhs))
+       | [] -> mk_exp (E_assign (mk_lexp (LE_app (f', args')), rhs))
        | [lexp] -> mk_exp (E_assign (lexp, mk_exp (E_app (f', args' @ [rhs]))))
        | lexps ->
-          let lexp = mk_lexp (LEXP_tup lexps) in
+          let lexp = mk_lexp (LE_tuple lexps) in
           mk_exp (E_assign (lexp, mk_exp (E_app (f', args' @ [rhs]))))
      end
   | _ ->
-     mk_exp (E_assign (mk_lexp (LEXP_memory (f', args')), rhs))
+     mk_exp (E_assign (mk_lexp (LE_app (f', args')), rhs))
 
 and sail_of_tuple_assignment ctx lexps rhs =
   let pat_assignment idx = function
@@ -1700,7 +1686,7 @@ and sail_of_tuple_assignment ctx lexps rhs =
   let (pats, assignments) = List.split (List.mapi pat_assignment lexps) in
   let rhs' = sail_of_expr ctx rhs in
   let assignments' = sail_of_stmts ~force_block:true ctx (List.concat assignments) in
-  mk_exp (E_let (mk_letbind (mk_pat (P_tup pats)) rhs', assignments'))
+  mk_exp (E_let (mk_letbind (mk_pat (P_tuple pats)) rhs', assignments'))
 
 and sail_of_pat ctx (p : ASL_AST.pattern) =
   match p with
@@ -1765,7 +1751,7 @@ and sail_of_ty ctx (ty : ASL_AST.ty) =
   match ty with
   | ASL_AST.Type_Tuple [] -> unit_typ
   | ASL_AST.Type_Tuple [ty] -> recur ty
-  | ASL_AST.Type_Tuple ts -> mk_typ (Typ_tup (List.map recur ts))
+  | ASL_AST.Type_Tuple ts -> mk_typ (Typ_tuple (List.map recur ts))
   | ASL_AST.Type_Constructor bit when name_of_ident bit = "bit" -> bits_typ (nint 1)
   | ASL_AST.Type_Constructor id -> mk_id_typ (sail_type_id_of_ident id)
   | ASL_AST.Type_Bits expr -> bits_typ (nexp_simp (sail_nexp_of_expr ctx expr))
@@ -1801,10 +1787,10 @@ and infer_sail_expr_typ ctx (e : ASL_AST.expr) =
          | Unbound _ -> None
        end
     | Expr_TApply (f, tes, _) ->
-       Util.option_map (sail_of_ty ctx) (instantiate_fun_ret_typ f tes)
+       Option.map (sail_of_ty ctx) (instantiate_fun_ret_typ f tes)
     | Expr_Tuple es ->
        begin match Util.option_all (List.map recur es) with
-         | Some typs -> Some (mk_typ (Typ_tup typs))
+         | Some typs -> Some (mk_typ (Typ_tuple typs))
          | None -> None
        end
     | Expr_Slices (e', slices) ->
@@ -1861,7 +1847,7 @@ and infer_sail_lexpr_typ ctx (le : ASL_AST.lexpr) =
          | Unbound _ -> None
        end
     | LExpr_Write (f, tes, _) ->
-       Util.option_map (sail_of_ty ctx) (instantiate_sfun_vtyp f tes)
+       Option.map (sail_of_ty ctx) (instantiate_sfun_vtyp f tes)
     | LExpr_Slices (le', slices) ->
        begin match recur le', int_of_expr (width_of_slices slices) with
          | Some typ, Some w when is_bits_typ ctx typ ->
@@ -1901,7 +1887,7 @@ and infer_sail_lexpr_typ ctx (le : ASL_AST.lexpr) =
        end
     | LExpr_Tuple les ->
        begin match Util.option_all (List.map recur les) with
-         | Some typs -> Some (mk_typ (Typ_tup typs))
+         | Some typs -> Some (mk_typ (Typ_tuple typs))
          | None -> None
        end
     | _ -> None
@@ -1912,7 +1898,7 @@ and sail_of_stmt ctx (stmt : ASL_AST.stmt) =
   match stmt with
   | ASL_AST.Stmt_VarDecl (ty, id, e, _) ->
      let ty' = sail_of_ty ctx ty in
-     let le = mk_lexp (LEXP_cast (ty', sail_id_of_ident id)) in
+     let le = mk_lexp (LE_typ (ty', sail_id_of_ident id)) in
      let e' = coerce_exp ctx.tc_env (infer_sail_expr_typ ctx e) (Some ty') (sail_of_expr ctx e) in
      mk_exp (E_assign (le, e'))
   (* TODO: Clean up special casing of assignments and merge with sail_of_assignment *)
@@ -1930,7 +1916,7 @@ and sail_of_stmt ctx (stmt : ASL_AST.stmt) =
      let args' = args_of_exps (List.map (sail_of_expr ctx) (implicits @ args)) in
      let e_typ = infer_sail_expr_typ ctx e in
      let le_typ = infer_sail_lexpr_typ ctx le in
-     let read_typ = instantiate_fun_ret_typ read targs |> Util.option_map (sail_of_ty ctx) in
+     let read_typ = instantiate_fun_ret_typ read targs |> Option.map (sail_of_ty ctx) in
      let e' = sail_of_expr ctx e |> coerce_exp ctx.tc_env e_typ le_typ in
      let rexp = mk_exp (E_app (sail_id_of_ident read, args')) in
      begin match read_typ with
@@ -1968,7 +1954,7 @@ and sail_of_stmt ctx (stmt : ASL_AST.stmt) =
             | _ -> failwith ("unsupported bitfield type in " ^ pp_lexpr le)
           end
        | _ ->
-          mk_exp (E_record_update (rexp, [mk_fexp (sail_id_of_ident field) e']))
+          mk_exp (E_struct_update (rexp, [mk_fexp (sail_id_of_ident field) e']))
      in
      sail_of_setter_assignment ctx write targs args rhs
   | ASL_AST.Stmt_Assign ((LExpr_Fields (LExpr_ReadWrite (read, write, targs, args), fields) as le), e, l) ->
@@ -1985,14 +1971,14 @@ and sail_of_stmt ctx (stmt : ASL_AST.stmt) =
      let v' = sail_id_of_ident v in
      let e' = sail_of_expr ctx e in
      let rhs = sail_slice_update_exp ctx slice (mk_exp (E_id v')) e' in
-     mk_exp (E_assign (mk_lexp (LEXP_id v'), rhs))
+     mk_exp (E_assign (mk_lexp (LE_id v'), rhs))
   | ASL_AST.Stmt_Assign (LExpr_Slices (LExpr_Var v, [Slice_Single idx]), e, _)
     when is_bits_local ctx v ->
      let v' = sail_id_of_ident v in
      let idx' = sail_of_expr ctx idx in
      let e' = sail_of_expr ctx e |> coerce_exp ctx.tc_env (infer_sail_expr_typ ctx e) (Some (bits_typ (nint 1))) in
      let e'' = mk_exp (E_app (mk_id "Bit", [e'])) in
-     mk_exp (E_assign (mk_lexp (LEXP_vector (mk_lexp (LEXP_id v'), idx')), e''))
+     mk_exp (E_assign (mk_lexp (LE_vector (mk_lexp (LE_id v'), idx')), e''))
   | ASL_AST.Stmt_Assign (LExpr_Tuple lexps, e, _)
     when List.exists has_setter_lexpr lexps || List.exists has_wildcard_lexpr lexps ->
      sail_of_tuple_assignment ctx lexps e
@@ -2004,12 +1990,12 @@ and sail_of_stmt ctx (stmt : ASL_AST.stmt) =
   | ASL_AST.Stmt_FunReturn (e, _) ->
      let e' = sail_of_expr ctx e in
      let src_typ = infer_sail_expr_typ ctx e in
-     let dst_typ = Util.option_map (sail_of_ty ctx) ctx.fun_ret_typ in
+     let dst_typ = Option.map (sail_of_ty ctx) ctx.fun_ret_typ in
      let e'' = coerce_exp ctx.tc_env src_typ dst_typ e' in
      mk_exp (E_return e'')
   | ASL_AST.Stmt_ProcReturn _ ->
      let ret_val = match ctx.fun_ret_typ with
-       | Some ty -> mk_exp (E_cast (sail_of_ty ctx ty, mk_lit_exp L_undef))
+       | Some ty -> mk_exp (E_typ (sail_of_ty ctx ty, mk_lit_exp L_undef))
        | None -> mk_lit_exp L_unit
      in
      mk_exp (E_return ret_val)
@@ -2041,22 +2027,20 @@ and sail_of_stmt ctx (stmt : ASL_AST.stmt) =
        | None ->
           let is_complete =
             try
-              let e'' = Type_check.infer_exp ctx.tc_env e' in
-              let typ = Type_check.typ_of e'' in
-              (* Remove bodies of cases so that type checking errors there
-               * won't stop the pattern completeness check *)
-              let strip_exp pexp =
-                let (pat, guard, _, a) = destruct_pexp pexp in
-                Ast_util.construct_pexp (pat, guard, sail_of_stmts ctx [], a)
+              let strip_body pexp =
+                (* Remove bodies of cases so that type checking errors there
+                 * won't stop the pattern completeness check *)
+                 let (pat, guard, _, a) = destruct_pexp pexp in
+                Ast_util.construct_pexp (pat, guard, mk_lit_exp L_unit, a)
               in
-              let check alt = Type_check.check_case ctx.tc_env typ (strip_exp alt) unit_typ in
-              let alts'' = List.map check alts' in
-              pats_complete Parse_ast.Unknown ctx.tc_env alts'' typ
+              let dummy_exp = mk_exp (E_match (e', List.map strip_body alts')) in
+              let (E_aux (_, (_, a))) = Type_check.check_exp ctx.tc_env dummy_exp unit_typ in
+              Option.is_some (Ast_util.get_attribute "complete" (Type_check.untyped_annot a))
             with _ -> false
           in
           if is_complete then [] else [mk_pexp (Pat_exp (mk_pat P_wild, sail_of_stmts ctx []))]
      in
-     mk_exp (E_case (e', alts' @ otherwise'))
+     mk_exp (E_match (e', alts' @ otherwise'))
   | ASL_AST.Stmt_For (var, start, dir, stop, stmts, _) ->
      let var' = sail_id_of_ident var in
      let start' = sail_of_expr ctx start in
@@ -2120,7 +2104,7 @@ and sail_of_stmt ctx (stmt : ASL_AST.stmt) =
      failwith ("sail_of_stmt: " ^ pp_to_string (ASL_PP.pp_stmt stmt))
 
 and sail_of_alt ctx (Alt_Alt (pats, guard, stmts)) =
-  let guard' = Util.option_map (sail_of_expr ctx) guard in
+  let guard' = Option.map (sail_of_expr ctx) guard in
   let stmts' = sail_of_stmts ctx stmts in
   let pexp_of_pat (pat, pguard) =
     construct_pexp (pat, combine_guards "&" pguard guard') stmts'
@@ -2133,7 +2117,7 @@ and sail_pexp_of_catcher ctx exid (ASL_AST.Catcher_Guarded (guard, stmts)) =
   let stmts' = sail_of_stmts ctx stmts in
   mk_pexp (Pat_when (pat, guard', stmts'))
 
-and sail_block_of_stmts (ctx : ctx) (stmts : ASL_AST.stmt list) : unit exp list =
+and sail_block_of_stmts (ctx : ctx) (stmts : ASL_AST.stmt list) : uannot exp list =
   match stmts with
   | ASL_AST.Stmt_VarDeclsNoInit (ty, ids, _) :: stmts ->
      let ty' = sail_of_ty ctx ty in
@@ -2148,7 +2132,7 @@ and sail_block_of_stmts (ctx : ctx) (stmts : ASL_AST.stmt list) : unit exp list 
        in
        let id' = sail_id_of_ident id in
        let ctx' = declare_local id ty' ctx in
-       (ctx', mk_exp (E_assign (mk_lexp (LEXP_cast (ty', id')), e')))
+       (ctx', mk_exp (E_assign (mk_lexp (LE_typ (ty', id')), e')))
      in
      let init ids = function
        | Stmt_Assign (LExpr_Var id, e, l) when IdentSet.mem id ids ->
@@ -2174,7 +2158,7 @@ and sail_block_of_stmts (ctx : ctx) (stmts : ASL_AST.stmt list) : unit exp list 
          else local_typ ctx id
        in
        let e'' = coerce_exp ctx.tc_env (infer_sail_expr_typ ctx e) (Some ty') e' in
-       let le = mk_lexp (LEXP_cast (ty', sail_id_of_ident id)) in
+       let le = mk_lexp (LE_typ (ty', sail_id_of_ident id)) in
        mk_exp (E_assign (le, e'')) :: sail_block_of_stmts ctx stmts
      else
        (* Bind variables that are not modified (any more) as immutables *)
@@ -2195,7 +2179,7 @@ and sail_block_of_stmts (ctx : ctx) (stmts : ASL_AST.stmt list) : unit exp list 
        in
        let e'' = coerce_exp ctx.tc_env (infer_sail_expr_typ ctx e) (Some ty') e' in
        let id' = sail_id_of_ident id in
-       mk_exp (E_assign (mk_lexp (LEXP_cast (ty', id')), e''))
+       mk_exp (E_assign (mk_lexp (LE_typ (ty', id')), e''))
        :: sail_block_of_stmts ctx stmts
      else
        let ty' = local_typ ctx id in
@@ -2285,7 +2269,7 @@ and sail_of_assignment ctx lexpr expr =
      let idx' = sail_of_expr ctx idx in
      let expr' = sail_of_expr ctx expr |> coerce_exp ctx.tc_env (infer_sail_expr_typ ctx expr) (Some (bits_typ (nint 1))) in
      let expr'' = mk_exp (E_app (mk_id "Bit", [expr'])) in
-     (mk_lexp (LEXP_vector (inner_le'', idx')), expr'')
+     (mk_lexp (LE_vector (inner_le'', idx')), expr'')
   | LExpr_Slices (LExpr_Var v as inner_le, [Slice_LoWd (low, width) as slice])
     when not (is_constant_expr low) ->
      (* TODO: Handle inner lexprs other than variables *)
@@ -2300,7 +2284,7 @@ and sail_of_assignment ctx lexpr expr =
        | _ ->
           sail_slice_update_exp ctx slice (mk_exp (E_id v')) e'
      in
-     (mk_lexp (LEXP_id v'), rhs)
+     (mk_lexp (LE_id v'), rhs)
   | _ ->
      (sail_of_lexpr ctx lexpr, expr')
 
@@ -2417,6 +2401,27 @@ let get_fun_constraints decls =
   in
   List.fold_left add_decl Bindings.empty decls
 
+let rec bitvector_constraints_of_typ ctx typ = match unaux_typ typ with
+  | Typ_fn (args, ret_typ) ->
+     let arg_ncs = List.map (bitvector_constraints_of_typ ctx) args |> List.concat in
+     arg_ncs @ bitvector_constraints_of_typ ctx ret_typ
+  | Typ_tuple typs ->
+     List.map (bitvector_constraints_of_typ ctx) typs |> List.concat
+  | Typ_app (_, args) when not (is_bits_typ ctx typ) ->
+     List.map (bitvector_constraints_of_typ_arg ctx) args |> List.concat
+  | Typ_exist _ ->
+     (* TODO: Get constraints that don't use existentially quantified variables *)
+     []
+  | _ ->
+     if is_bits_typ ctx typ then
+       let (len, _, _) = vector_typ_args_of (expand_typ_synonyms ctx.tc_env typ) in
+       [nc_gteq len (nint 0)]
+     else []
+
+and bitvector_constraints_of_typ_arg ctx = function
+  | A_aux (A_typ typ, _) -> bitvector_constraints_of_typ ctx typ
+  | _ -> []
+
 let sail_typschm_of_funtype ?ncs:(ncs=[]) ctx id ret_ty args =
   let ret_ty' = sail_of_ty ctx ret_ty in
   let typ_of_arg (ty, id) =
@@ -2437,18 +2442,35 @@ let sail_typschm_of_funtype ?ncs:(ncs=[]) ctx id ret_ty args =
     if args = [] && implicit_typs = [] then ([], [unit_typ]) else
     List.split (List.map typ_of_arg args)
   in
-  let quants =
+  let kopts =
     List.concat kopts @ kopts_of_funtype ctx ret_ty args
-    |> KOptSet.of_list |> KOptSet.elements |> List.map mk_qi_kopt
+    |> KOptSet.of_list |> KOptSet.elements
   in
+  let quants = List.map mk_qi_kopt kopts in
+  let fun_typ = function_typ (implicit_typs @ arg_typs) ret_ty' in
   (* Add constraints extracted from function body as well as explicitly passed constraints *)
   let fun_ncs = try [Bindings.find id ctx.fun_constraints] with Not_found -> [] in
-  let nc_qis = match fun_ncs @ ncs with
+  (* Also add positivity constraints for bitvector lengths, but filter out those that can already
+     be proven from the existing constraints *)
+  let fun_env =
+    List.fold_right (Type_check.Env.add_typ_var Parse_ast.Unknown) kopts ctx.tc_env
+    |> List.fold_right Type_check.Env.add_constraint (fun_ncs @ ncs)
+  in
+  let rec filter_redundant_constraints fun_env = function
+    | nc :: ncs ->
+       let needed = try not (Type_check.prove __POS__ fun_env nc) with _ -> true in
+       let fun_env = try Type_check.Env.add_constraint nc fun_env with _ -> fun_env in
+       let ncs' = filter_redundant_constraints fun_env ncs in
+       if needed then nc :: ncs' else ncs'
+    | [] -> []
+  in
+  let typ_ncs = bitvector_constraints_of_typ ctx fun_typ |> filter_redundant_constraints fun_env in
+  let nc_qis = match fun_ncs @ ncs @ typ_ncs with
     | [] -> []
     | ncs -> [mk_qi_nc (List.fold_left nc_and nc_true ncs)]
   in
   let tq = mk_typquant (quants @ nc_qis) in
-  mk_typschm tq (function_typ (implicit_typs @ arg_typs) ret_ty')
+  mk_typschm tq fun_typ
 
 let sail_valspec_of_decl ?ncs:(ncs=[]) ctx id ret_ty args =
   let id' = sail_id_of_ident id in
@@ -2472,7 +2494,7 @@ let sail_fundef_of_decl ?ncs:(ncs=[]) ctx id ret_ty args stmts =
     let v' = sail_id_of_ident v in
     let arg_id = append_id v' "__arg" in
     let ty' = sail_of_ty ctx ty in
-    mk_exp (E_assign (mk_lexp (LEXP_cast (ty', v')), mk_exp (E_id arg_id)))
+    mk_exp (E_assign (mk_lexp (LE_typ (ty', v')), mk_exp (E_id arg_id)))
   in
   let mutated_decls = List.filter is_mutated args |> List.map mutated_decl in
   let add_mutated_decls body =
@@ -2485,7 +2507,7 @@ let sail_fundef_of_decl ?ncs:(ncs=[]) ctx id ret_ty args stmts =
     match List.map pat_of_arg args with
     | [] -> mk_pat (P_lit (mk_lit L_unit))
     | [p] -> p
-    | ps -> mk_pat (P_tup ps)
+    | ps -> mk_pat (P_tuple ps)
   in
   (* Letbind calls to getter function for global type variables *)
   let stmts = rewrite_pl stmts in
@@ -2563,7 +2585,7 @@ let sail_bitfield_of_regtype ctx id len fields =
     try Some (sail_id_of_ident id, index_range_of_slices ctx slices) with _ -> None
   in
   let fields' = Util.option_these (List.map mk_field fields) in
-  DEF_type (TD_aux (TD_bitfield (id, bits_typ (nconstant len'), fields'), no_annot))
+  mk_def (DEF_type (TD_aux (TD_bitfield (id, bits_typ (nconstant len'), fields'), no_annot)))
 
 let rec bitfields_of_decls = function
   | Decl_Typedef (id, Type_Register (_, ((_ :: _) as fields)), _) :: decls ->
@@ -2610,7 +2632,7 @@ let sail_decoder_clause ctx = function
      in
      decoder_num := Big_int.succ !decoder_num;
      let see_check = if !opt_see_checks then Some (mk_exp (E_app_infix (mk_exp (E_id (mk_id "SEE")), mk_id "<", mk_lit_exp (L_num !decoder_num)))) else None in
-     let see_update = if !opt_see_checks then [mk_exp (E_assign (mk_lexp (LEXP_id (mk_id "SEE")), mk_lit_exp (L_num !decoder_num)))] else [] in
+     let see_update = if !opt_see_checks then [mk_exp (E_assign (mk_lexp (LE_id (mk_id "SEE")), mk_lit_exp (L_num !decoder_num)))] else [] in
      let clause_guard = and_bool_opt (and_bool_opt guard' pguard) see_check in
      let decode_id = add_name_prefix "decode" id in
      let decode_args = List.map (fun (IField_Field (id, _, _)) -> Expr_Var id) fields in
@@ -2632,18 +2654,19 @@ let sail_decoder_clause ctx = function
        mk_exp (E_let (mk_letbind (mk_pat (P_id id)) getter, mk_exp (E_block [exp])))
      in
      let body = mk_exp (E_block (see_update @ [List.fold_right bind_field getters decode_stmt'])) in
-     let clause_pat = mk_pat (P_tup [mk_pat (P_id (mk_id "pc")); mk_pat (P_as (pat, mk_id opcode_name))]) in
+     let clause_pat = mk_pat (P_tuple [mk_pat (P_id (mk_id "pc")); mk_pat (P_as (pat, mk_id opcode_name))]) in
      let pexp = construct_pexp (clause_pat, clause_guard) body in
      let decoder_id = mk_id ("__Decode" ^ pprint_ident arch) in
-     let sdfuncl = SD_funcl (FCL_aux (FCL_Funcl (decoder_id, pexp), no_annot)) in
-     [DEF_scattered (SD_aux (sdfuncl, no_annot))]
+     let a = (mk_def_annot Parse_ast.Unknown, empty_uannot) in
+     let sdfuncl = SD_funcl (FCL_aux (FCL_funcl (decoder_id, pexp), a)) in
+     [mk_def (DEF_scattered (SD_aux (sdfuncl, no_annot)))]
 
 let sail_of_encoding ctx opost exec_id vl_exprs exec_args conditional encoding =
   match encoding with
   | (ASL_AST.Encoding_Block (id, _arch, fields, _opcode, guard, _unpreds, stmts, l)) ->
      let decode_id = add_name_prefix "decode" id in
      let args = List.map arg_of_ifield fields in
-     let post = Util.option_default [] opost in
+     let post = Option.value ~default:[] opost in
      let guard_assert = match guard with
        | Expr_Var id when pprint_ident id = "TRUE" -> []
        | _ -> [Stmt_Assert (guard, l)]
@@ -2736,7 +2759,7 @@ let rec sail_of_declaration ctx (decl : ASL_AST.declaration) =
      let field' (ty, id) = (sail_of_ty ctx ty, sail_id_of_ident id) in
      let tvars = ASL_Utils.unionSets (List.map (fun (ty, _) -> ASL_Utils.fv_type ty) fields) in
      let tq = mk_typquant (List.map mk_qi_kopt (kopts_of_vars ctx tvars)) in
-     [DEF_type (TD_aux (TD_record (id', tq, List.map field' fields, false), no_annot))]
+     [mk_def (DEF_type (TD_aux (TD_record (id', tq, List.map field' fields, false), no_annot)))]
      @ (if IdentSet.is_empty tvars then unknown_fun id' (mk_id_typ id') else [])
   | Decl_Typedef (id, Type_Register (len, ((_ :: _) as fields)), _) ->
      [sail_bitfield_of_regtype ctx (sail_type_id_of_ident id) len fields]
@@ -2745,18 +2768,18 @@ let rec sail_of_declaration ctx (decl : ASL_AST.declaration) =
      let ty' = sail_of_ty ctx ty in
      let kopts = kopts_of_vars ctx (ASL_Utils.fv_type ty) in
      let tq = mk_typquant (List.map mk_qi_kopt kopts) in
-     [DEF_type (TD_aux (TD_abbrev (id', tq, arg_typ ty'), no_annot))]
+     [mk_def (DEF_type (TD_aux (TD_abbrev (id', tq, arg_typ ty'), no_annot)))]
      @ (if kopts = [] then unknown_fun id' ty' else [])
   | Decl_Enum (id, ids, _) ->
      let id' = sail_type_id_of_ident id in
      let ids' = List.map sail_id_of_ident ids in
-     [DEF_type (TD_aux (TD_enum (id', ids', false), no_annot))]
+     [mk_def (DEF_type (TD_aux (TD_enum (id', ids', false), no_annot)))]
      @ unknown_fun id' (mk_id_typ id')
   | Decl_Var (Type_Register (len, ((_ :: _) as fields)), id, _) ->
      let id' = sail_id_of_ident id in
      let typ_id = append_id id' "_Type" in
      sail_bitfield_of_regtype ctx typ_id len fields ::
-     [DEF_reg_dec (DEC_aux (DEC_reg (mk_id_typ typ_id, id', None), no_annot))]
+     [mk_def (DEF_register (DEC_aux (DEC_reg (mk_id_typ typ_id, id', None), no_annot)))]
   | Decl_Var (Type_Array (indices, (Type_Register (_, (_ :: _)) as regtype)), id, l) ->
      let regtype_id = add_name_suffix "ElemType" id in
      sail_of_declaration ctx (Decl_Typedef (regtype_id, regtype, l))
@@ -2764,12 +2787,12 @@ let rec sail_of_declaration ctx (decl : ASL_AST.declaration) =
   | Decl_Var (ty, id, _) ->
      let id' = sail_id_of_ident id in
      let ty' = sail_of_ty ctx ty in
-     [DEF_reg_dec (DEC_aux (DEC_reg (ty', id', None), no_annot))]
+     [mk_def (DEF_register (DEC_aux (DEC_reg (ty', id', None), no_annot)))]
   | Decl_Config (ty, id, e, _) ->
      let id' = sail_id_of_ident id in
      let ty' = sail_of_ty ctx ty in
      let e' = sail_of_expr ctx e in
-     [DEF_reg_dec (DEC_aux (DEC_reg (ty', id', Some e'), no_annot))]
+     [mk_def (DEF_register (DEC_aux (DEC_reg (ty', id', Some e'), no_annot)))]
   | Decl_Const (ty, id, e, _) ->
      let id' = sail_id_of_ident id in
      let (ty', tydef) =
@@ -2777,12 +2800,12 @@ let rec sail_of_declaration ctx (decl : ASL_AST.declaration) =
          try
            let nexp = sail_nexp_of_expr ctx e in
            (atom_typ nexp,
-            [DEF_type (TD_aux (TD_abbrev (id', mk_typquant [], arg_nexp nexp), no_annot))])
+            [mk_def (DEF_type (TD_aux (TD_abbrev (id', mk_typquant [], arg_nexp nexp), no_annot)))])
          with _ -> (sail_of_ty ctx ty, [])
        else (sail_of_ty ctx ty, [])
      in
      let pat = mk_pat (P_typ (ty', mk_pat (P_id id'))) in
-     [DEF_val (mk_letbind pat (sail_of_expr ctx e))] @ tydef
+     [mk_def (DEF_let (mk_letbind pat (sail_of_expr ctx e)))] @ tydef
   | Decl_FunType (ret_ty, id, args, _)
   | Decl_BuiltinFunction (ret_ty, id, args, _)
   | Decl_ArrayGetterType (ret_ty, id, args, _) ->
@@ -2909,7 +2932,7 @@ let rec sail_of_declaration ctx (decl : ASL_AST.declaration) =
          initialise_vars ics stmts
        end
      in
-     let opost = Util.option_map initialise_vars opost in
+     let opost = Option.map initialise_vars opost in
      let encodings =
        let initialise_vars_enc (Encoding_Block (id, iset, fs, opc, g, unpreds, stmts, l)) =
          Encoding_Block (id, iset, fs, opc, g, unpreds, initialise_vars stmts, l)
@@ -2937,9 +2960,9 @@ let rec sail_of_declaration ctx (decl : ASL_AST.declaration) =
      (* Handled separately below *)
      []
   | Decl_Operator1 (op, ids, _) ->
-     [DEF_overload (sailify_unop op, List.map sail_id_of_ident ids)]
+     [mk_def (DEF_overload (sailify_unop op, List.map sail_id_of_ident ids))]
   | Decl_Operator2 (op, ids, _) ->
-     [DEF_overload (sailify_binop op, List.map sail_id_of_ident ids)]
+     [mk_def (DEF_overload (sailify_binop op, List.map sail_id_of_ident ids))]
   | Decl_DecoderDefn (_, _, _) ->
      print_endline "TODO: Decl_DecoderDefn";
      []
@@ -2976,7 +2999,7 @@ let sail_of_maps ctx (decls: ASL_AST.declaration list) =
          | Some pat -> sail_of_pat ctx pat
          | None -> (mk_pat (P_id (sail_id_of_ident id)), None)
        in
-       let guard' = Util.option_map (sail_of_expr ctx) guard in
+       let guard' = Option.map (sail_of_expr ctx) guard in
        let (pat', guards') =
          match args with
          | [] -> (mk_pat P_wild, guard')
@@ -2986,7 +3009,7 @@ let sail_of_maps ctx (decls: ASL_AST.declaration list) =
          | _ ->
             let (pats, pguards) = List.split (List.map get_arg_pat args) in
             let pguard = List.fold_right (combine_guards "&") pguards guard' in
-            (mk_pat (P_tup pats), pguard)
+            (mk_pat (P_tuple pats), pguard)
        in
        let declare_arg (ty, id) ctx = declare_immutable id (sail_of_ty ctx ty) ctx in
        let (mapped_args, unmapped_args) = List.partition has_field_mapping args in
@@ -3009,11 +3032,12 @@ let sail_of_maps ctx (decls: ASL_AST.declaration list) =
     let arg_pats = match args with
       | [] -> mk_pat (P_lit (mk_lit L_unit))
       | [arg] -> arg_pat arg
-      | args -> mk_pat (P_tup (List.map arg_pat args))
+      | args -> mk_pat (P_tuple (List.map arg_pat args))
     in
     let fallthrough_cl = mk_pexp (Pat_exp (arg_pats, fallthrough')) in
     let clauses' = List.rev (fallthrough_cl :: clauses) in
-    let mk_funcl cl = FCL_aux (FCL_Funcl (name', cl), no_annot) in
+    let a = (mk_def_annot Parse_ast.Unknown, empty_uannot) in
+    let mk_funcl cl = FCL_aux (FCL_funcl (name', cl), a) in
     mk_fundef (List.map mk_funcl clauses')
   in
   List.map sail_of_mapdef (ASL_Utils.Bindings.bindings mapdefs')

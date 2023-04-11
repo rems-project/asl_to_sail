@@ -281,7 +281,7 @@ let impdef_decl id =
   let impl = Decl_FunDefn (ty, fun_id, [arg], [body], Unknown) in
   [decl; impl]
 
-type sail_ast = unit ast
+type sail_ast = uannot ast
 
 let header = ref (None : string option)
 
@@ -329,8 +329,8 @@ let green str = termcode 1 ^ termcode 32 ^ str ^ termcode 0
 (* let red str = termcode 1 ^ termcode 31 ^ str ^ termcode 0 *)
 
 let is_valspec = function
-  | Ast.DEF_spec _ -> true
-  | Ast.DEF_overload _ -> true
+  | Ast.DEF_aux (Ast.DEF_val _, _) -> true
+  | Ast.DEF_aux (Ast.DEF_overload _, _) -> true
   | _ -> false
 
 let get_editor =
@@ -339,7 +339,7 @@ let get_editor =
   try Sys.getenv "EDITOR" with
   | Not_found -> print_endline "EDITOR and VISUAL environment vars unset"; "vim"
 
-exception Asl_type_error of unit ast * Parse_ast.l * string;;
+exception Asl_type_error of uannot ast * Parse_ast.l * string;;
 
 module StringSet = Set.Make(String)
 module StringMap = Map.Make(String)
@@ -474,7 +474,7 @@ let rec merge_encodings = function
         merge encodings *)
      let pp_stmts = List.map ASL_Utils.pp_stmt in
      let stmts_eq s1 s2 = pp_stmts s1 = pp_stmts s2 in
-     let ostmts_eq s1 s2 = stmts_eq (Util.option_default [] s1) (Util.option_default [] s2) in
+     let ostmts_eq s1 s2 = stmts_eq (Option.value ~default:[] s1) (Option.value ~default:[] s2) in
      let merge i1 i2 = match (i1, i2) with
        | (Decl_InstructionDefn (id1, encs1, opost1, cond1, exec1, l1),
           Decl_InstructionDefn (id2, encs2, opost2, cond2, exec2, _))
@@ -550,12 +550,12 @@ let rec get_unresolved_quants (err: Type_check.type_error) =
   | Err_no_num_ident _
   | Err_other _ -> []
 
-let is_duplicate_def (err: Type_check.type_error) def =
+let is_duplicate_def (err: Type_check.type_error) (Ast.DEF_aux (def, _)) =
   let open Ast in
   let err_str = Type_error.string_of_type_error err in
   let is_err str = Str.string_match (Str.regexp_string str) err_str 0 in
   match def with
-  | DEF_reg_dec (DEC_aux (DEC_reg (_, id, _), _)) ->
+  | DEF_register (DEC_aux (DEC_reg (_, id, _), _)) ->
      is_err ("Register " ^ string_of_id id ^ " is already bound")
   | DEF_fundef fd ->
      is_err ("Function " ^ string_of_id (id_of_fundef fd) ^ " has already been declared")
@@ -576,7 +576,7 @@ let remove_duplicate_def err decls =
   List.rev (remove_first (is_duplicate_def err) (List.rev decls))
 
 let is_duplicate_val_spec (ctx : Translate_asl.ctx) = function
-  | Ast.DEF_spec (Ast.VS_aux (Ast.VS_val_spec (_, id, _, _), _)) ->
+  | Ast.DEF_aux (Ast.DEF_val (Ast.VS_aux (Ast.VS_val_spec (_, id, _, _), _)), _) ->
      begin match Type_check.Env.get_val_spec id ctx.tc_env with
        | (_, _) -> true
        | exception _ -> false
@@ -584,7 +584,7 @@ let is_duplicate_val_spec (ctx : Translate_asl.ctx) = function
   | _ -> false
 
 let get_fundef_id = function
-  | Ast.DEF_fundef fd -> [id_of_fundef fd]
+  | Ast.DEF_aux (Ast.DEF_fundef fd, _) -> [id_of_fundef fd]
   | _ -> []
 
 let report_sail_error (ctx: Translate_asl.ctx) decls sail convert continue =
@@ -827,7 +827,7 @@ and convert_ast ?use_patches:(use_patches=true) ctx = function
      end
 
 type processed_file =
-  | ASL_File of string * LibASL.Asl_ast.declaration list * Type_check.tannot Ast_defs.ast * unit Ast_defs.ast
+  | ASL_File of string * LibASL.Asl_ast.declaration list * Type_check.tannot Ast_defs.ast * uannot Ast_defs.ast
   | Sail_File of string * Type_check.tannot Ast_defs.ast
 
 let write_processed_file = function
@@ -1012,6 +1012,7 @@ let main () : unit =
     Constraint.load_digests ();
     Sail_PP.opt_use_heuristics := true;
     Libsail.Nl_flow.opt_nl_flow := true;
+    Type_check.opt_expand_valspec := false; (* Preserve type abbreviations in val-specs for callgraph computation and slicing *)
 
     (* Set up the context *)
     let ctx = { Translate_asl.empty_ctx with tc_env = Type_check.initial_env } in

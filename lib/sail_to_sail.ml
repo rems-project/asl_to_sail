@@ -12,15 +12,15 @@ module Reporting = Libsail.Reporting
 (* ==== Re-writing overloaded ASL functions ==== *)
 
 let is_valspec = function
-  | DEF_spec _ -> true
+  | DEF_aux (DEF_val _, _) -> true
   | _ -> false
 
 let is_fundef = function
-  | DEF_fundef _ -> true
+  | DEF_aux (DEF_fundef _, _) -> true
   | _ -> false
 
 let is_overload = function
-  | DEF_overload _ -> true
+  | DEF_aux (DEF_overload _, _) -> true
   | _ -> false
 
 let id_append id str =
@@ -28,14 +28,14 @@ let id_append id str =
   | Id_aux (Id v, l) -> Id_aux (Id (v ^ "__" ^ str), l)
   | Id_aux (Operator _, _) -> failwith "Cannot append to infix id"
 
-let rename_funcl f (FCL_aux (FCL_Funcl (id, pexp), annot)) =
-  FCL_aux (FCL_Funcl (f id, pexp), annot)
+let rename_funcl f (FCL_aux (FCL_funcl (id, pexp), annot)) =
+  FCL_aux (FCL_funcl (f id, pexp), annot)
 
 let rename_fundef f (FD_aux (FD_function (r_opt, t_opt, funcls), annot)) =
   FD_aux (FD_function (r_opt, t_opt, List.map (rename_funcl f) funcls), annot)
 
 let rec rename_fundefs n = function
-  | (DEF_fundef fdef :: defs) -> DEF_fundef (rename_fundef (fun id -> id_append id (string_of_int n)) fdef) :: rename_fundefs (n + 1) defs
+  | (DEF_aux (DEF_fundef fdef, a) :: defs) -> DEF_aux (DEF_fundef (rename_fundef (fun id -> id_append id (string_of_int n)) fdef), a) :: rename_fundefs (n + 1) defs
   | def :: defs -> def :: rename_fundefs n defs
   | [] -> []
 
@@ -46,11 +46,11 @@ let rename_valspec f (VS_aux (vs_aux, annot)) = VS_aux (rename_valspec_aux f vs_
 let valspec_id (VS_aux (VS_val_spec (_, id, _, _), _)) = id
 
 let valspec_of_def = function
-  | DEF_spec vs -> vs
+  | DEF_aux (DEF_val vs, _) -> vs
   | _ -> assert false
 
 let rec rename_valspecs n = function
-  | (DEF_spec vs :: defs) -> DEF_spec (rename_valspec (fun id -> id_append id (string_of_int n)) vs) :: rename_valspecs (n + 1) defs
+  | (DEF_aux (DEF_val vs, a) :: defs) -> DEF_aux (DEF_val (rename_valspec (fun id -> id_append id (string_of_int n)) vs), a) :: rename_valspecs (n + 1) defs
   | def :: defs -> def :: rename_valspecs n defs
   | [] -> []
 
@@ -84,12 +84,12 @@ let rewrite_overloaded_top sail =
       let get_set_overload =
         if Str.string_match (Str.regexp "^a[sg]et_") (string_of_id id) 0 then
           let id = mk_id (Str.replace_first (Str.regexp "^a[sg]et_") "" (string_of_id id)) in
-          [DEF_overload (id, List.map (fun def -> valspec_id (valspec_of_def def)) valspecs)]
+          [mk_def (DEF_overload (id, List.map (fun def -> valspec_id (valspec_of_def def)) valspecs))]
         else
           []
       in
       valspecs
-      @ [DEF_overload (id, List.map (fun def -> valspec_id (valspec_of_def def)) valspecs)]
+      @ [mk_def (DEF_overload (id, List.map (fun def -> valspec_id (valspec_of_def def)) valspecs))]
       @ get_set_overload
       @ rename_fundefs 0 funs
     end
@@ -121,8 +121,8 @@ let rec map_pat f (P_aux (p_aux, l)) =
   | P_vector_concat pats ->
      let p_aux = P_vector_concat (List.map (map_pat f) pats) in
      f (rewrap p_aux)
-  | P_tup pats ->
-     let p_aux = P_tup (List.map (map_pat f) pats) in
+  | P_tuple pats ->
+     let p_aux = P_tuple (List.map (map_pat f) pats) in
      f (rewrap p_aux)
   | P_list pats ->
      let p_aux = P_list (List.map (map_pat f) pats) in
@@ -139,12 +139,13 @@ let rec map_pat f (P_aux (p_aux, l)) =
   | P_string_append pats ->
      let p_aux = P_string_append (List.map (map_pat f) pats) in
      f (rewrap p_aux)
+  | P_vector_subrange _ -> rewrap p_aux
 
 type alg =
-  { f_exp : unit exp -> unit exp;
-    f_pat : unit pat -> unit pat;
-    f_lexp : unit lexp -> unit lexp;
-    f_fexp : unit fexp -> unit fexp;
+  { f_exp : uannot exp -> uannot exp;
+    f_pat : uannot pat -> uannot pat;
+    f_lexp : uannot lexp -> uannot lexp;
+    f_fexp : uannot fexp -> uannot fexp;
     f_typ : typ -> typ;
   }
 
@@ -168,8 +169,8 @@ let rec map_exp alg (E_aux (exp_aux, l)) =
   | E_lit lit ->
      let exp_aux = E_lit lit in
      alg.f_exp (rewrap exp_aux)
-  | E_cast (typ, exp) ->
-     let exp_aux = E_cast (alg.f_typ typ, map_exp alg exp) in
+  | E_typ (typ, exp) ->
+     let exp_aux = E_typ (alg.f_typ typ, map_exp alg exp) in
      alg.f_exp (rewrap exp_aux)
   | E_app (id, exps) ->
      let exp_aux = E_app (id, List.map (map_exp alg) exps) in
@@ -210,17 +211,17 @@ let rec map_exp alg (E_aux (exp_aux, l)) =
   | E_cons (exp1, exp2) ->
      let exp_aux = E_cons (map_exp alg exp1, map_exp alg exp2) in
      alg.f_exp (rewrap exp_aux)
-  | E_record fexps ->
-     let exp_aux = E_record (List.map (map_fexp alg) fexps) in
+  | E_struct fexps ->
+     let exp_aux = E_struct (List.map (map_fexp alg) fexps) in
      alg.f_exp (rewrap exp_aux)
-  | E_record_update (exp, fexps) ->
-     let exp_aux = E_record_update (map_exp alg exp, List.map (map_fexp alg) fexps) in
+  | E_struct_update (exp, fexps) ->
+     let exp_aux = E_struct_update (map_exp alg exp, List.map (map_fexp alg) fexps) in
      alg.f_exp (rewrap exp_aux)
   | E_field (exp, id) ->
      let exp_aux = E_field (map_exp alg exp, id) in
      alg.f_exp (rewrap exp_aux)
-  | E_case (exp, pexps) ->
-     let exp_aux = E_case (map_exp alg exp, List.map (map_pexp alg) pexps) in
+  | E_match (exp, pexps) ->
+     let exp_aux = E_match (map_exp alg exp, List.map (map_pexp alg) pexps) in
      alg.f_exp (rewrap exp_aux)
   | E_var (lexp, exp, exp') ->
      let exp_aux = E_var (map_lexp alg lexp, map_exp alg exp, map_exp alg exp') in
@@ -263,49 +264,49 @@ and map_pexp alg (Pat_aux (p_aux, l)) =
      rewrap (Pat_exp (map_pat alg.f_pat pat, map_exp alg exp))
   | Pat_when (pat, exp1, exp2) ->
      rewrap (Pat_when (map_pat alg.f_pat pat, map_exp alg exp1, map_exp alg exp2))
-and map_lexp alg (LEXP_aux (l_aux, l)) =
-  let rewrap l_aux = LEXP_aux (l_aux, l) in
+and map_lexp alg (LE_aux (l_aux, l)) =
+  let rewrap l_aux = LE_aux (l_aux, l) in
   match l_aux with
-  | LEXP_id id -> alg.f_lexp (rewrap (LEXP_id id))
-  | LEXP_memory (id, exps) ->
-     let l_aux = LEXP_memory (id, List.map (map_exp alg) exps) in
+  | LE_id id -> alg.f_lexp (rewrap (LE_id id))
+  | LE_app (id, exps) ->
+     let l_aux = LE_app (id, List.map (map_exp alg) exps) in
      alg.f_lexp (rewrap l_aux)
-  | LEXP_cast (typ, id) -> alg.f_lexp (rewrap (LEXP_cast (alg.f_typ typ, id)))
-  | LEXP_tup lexps ->
-     let l_aux = LEXP_tup (List.map (map_lexp alg) lexps) in
+  | LE_typ (typ, id) -> alg.f_lexp (rewrap (LE_typ (alg.f_typ typ, id)))
+  | LE_tuple lexps ->
+     let l_aux = LE_tuple (List.map (map_lexp alg) lexps) in
      alg.f_lexp (rewrap l_aux)
-  | LEXP_vector (lexp, exp) ->
-     let l_aux = LEXP_vector (map_lexp alg lexp, map_exp alg exp) in
+  | LE_vector (lexp, exp) ->
+     let l_aux = LE_vector (map_lexp alg lexp, map_exp alg exp) in
      alg.f_lexp (rewrap l_aux)
-  | LEXP_vector_concat lexps ->
-     let l_aux = LEXP_vector_concat (List.map (map_lexp alg) lexps) in
+  | LE_vector_concat lexps ->
+     let l_aux = LE_vector_concat (List.map (map_lexp alg) lexps) in
      alg.f_lexp (rewrap l_aux)
-  | LEXP_vector_range (lexp, exp1, exp2) ->
-     let l_aux = LEXP_vector_range (map_lexp alg lexp, map_exp alg exp1, map_exp alg exp2) in
+  | LE_vector_range (lexp, exp1, exp2) ->
+     let l_aux = LE_vector_range (map_lexp alg lexp, map_exp alg exp1, map_exp alg exp2) in
      alg.f_lexp (rewrap l_aux)
-  | LEXP_field (lexp, id) ->
-     let l_aux = LEXP_field (map_lexp alg lexp, id) in
+  | LE_field (lexp, id) ->
+     let l_aux = LE_field (map_lexp alg lexp, id) in
      alg.f_lexp (rewrap l_aux)
-  | LEXP_deref exp ->
-     let l_aux = LEXP_deref (map_exp alg exp) in
+  | LE_deref exp ->
+     let l_aux = LE_deref (map_exp alg exp) in
      alg.f_lexp (rewrap l_aux)
-and map_fexp alg (FE_aux (FE_Fexp (id, exp), l)) =
-  alg.f_fexp (FE_aux (FE_Fexp (id, map_exp alg exp), l))
+and map_fexp alg (FE_aux (FE_fexp (id, exp), l)) =
+  alg.f_fexp (FE_aux (FE_fexp (id, map_exp alg exp), l))
 and map_letbind alg (LB_aux (LB_val (pat, exp), l)) =
   LB_aux (LB_val (map_pat alg.f_pat pat, map_exp alg exp), l)
 
-let map_funcl f (FCL_aux (FCL_Funcl (id, pexp), annot)) =
+let map_funcl f (FCL_aux (FCL_funcl (id, pexp), annot)) =
   let (pat, guard, exp, pat_annot) = destruct_pexp pexp in
   let (id, pat, guard, exp) = f id pat guard exp in
   let pexp = construct_pexp (pat, guard, exp, pat_annot) in
-  FCL_aux (FCL_Funcl (id, pexp), annot)
+  FCL_aux (FCL_funcl (id, pexp), annot)
 
 let map_funcl_exps f id pat guard exp =
-  (id, pat, Util.option_map f guard, f exp)
+  (id, pat, Option.map f guard, f exp)
 
 let map_fundef f = function
-  | DEF_fundef (FD_aux (FD_function (r_opt, t_opt, funcls), annot)) ->
-     DEF_fundef (FD_aux (FD_function (r_opt, t_opt, List.map (map_funcl f) funcls), annot))
+  | DEF_aux (DEF_fundef (FD_aux (FD_function (r_opt, t_opt, funcls), annot)), a) ->
+     DEF_aux (DEF_fundef (FD_aux (FD_function (r_opt, t_opt, List.map (map_funcl f) funcls), annot)), a)
   | def -> def
 
 let map_ast f ast = { ast with defs = List.map f ast.defs }
@@ -317,17 +318,17 @@ let filter_ast f ast = { ast with defs = List.filter f ast.defs }
 let iter_fundefs f =
   map_fundefs (fun id pat guard exp -> f id pat guard exp; (id, pat, guard, exp))
 
-let rec lexp_bindings (LEXP_aux (l_aux, _)) =
+let rec lexp_bindings (LE_aux (l_aux, _)) =
   match l_aux with
-  | LEXP_id id -> IdSet.singleton id
-  | LEXP_cast (_, id) -> IdSet.singleton id
-  | LEXP_tup lexps -> List.fold_left IdSet.union IdSet.empty (List.map lexp_bindings lexps)
-  | LEXP_vector (lexp, _) -> lexp_bindings lexp
-  | LEXP_vector_range (lexp, _, _) -> lexp_bindings lexp
-  | LEXP_vector_concat lexps -> List.fold_left IdSet.union IdSet.empty (List.map lexp_bindings lexps)
-  | LEXP_field (lexp, _) -> lexp_bindings lexp
-  | LEXP_memory _ -> IdSet.empty
-  | LEXP_deref _ -> IdSet.empty
+  | LE_id id -> IdSet.singleton id
+  | LE_typ (_, id) -> IdSet.singleton id
+  | LE_tuple lexps -> List.fold_left IdSet.union IdSet.empty (List.map lexp_bindings lexps)
+  | LE_vector (lexp, _) -> lexp_bindings lexp
+  | LE_vector_range (lexp, _, _) -> lexp_bindings lexp
+  | LE_vector_concat lexps -> List.fold_left IdSet.union IdSet.empty (List.map lexp_bindings lexps)
+  | LE_field (lexp, _) -> lexp_bindings lexp
+  | LE_app _ -> IdSet.empty
+  | LE_deref _ -> IdSet.empty
 
 let exp_lexp_bindings exp =
   let ids = ref IdSet.empty in
@@ -352,7 +353,7 @@ let rec pat_bindings (P_aux (p_aux, _)) =
   | P_id id -> IdSet.singleton id
   | P_var (pat, tpat) -> IdSet.union (tpat_bindings tpat (* is this right? *)) (pat_bindings pat)
   | P_cons (pat1, pat2) -> IdSet.union (pat_bindings pat1) (pat_bindings pat2)
-  | P_app (_, pats) | P_vector pats | P_vector_concat pats | P_tup pats | P_list pats ->
+  | P_app (_, pats) | P_vector pats | P_vector_concat pats | P_tuple pats | P_list pats ->
      List.fold_left IdSet.union IdSet.empty (List.map pat_bindings pats)
   | _ -> IdSet.empty
 
@@ -380,10 +381,10 @@ let exp_ids exp =
 let rewrite_mutated_parameters =
   let id_lexp id =
     match string_of_id id with
-    | "wback" | "hwupdatewalk" -> mk_lexp (LEXP_cast (bool_typ, id))
-    | "a" | "t" -> mk_lexp (LEXP_cast (int_typ, id))
-    | "n" -> mk_lexp (LEXP_cast (range_typ (nint 0) (nint 31), id))
-    | _ -> mk_lexp (LEXP_id id)
+    | "wback" | "hwupdatewalk" -> mk_lexp (LE_typ (bool_typ, id))
+    | "a" | "t" -> mk_lexp (LE_typ (int_typ, id))
+    | "n" -> mk_lexp (LE_typ (range_typ (nint 0) (nint 31), id))
+    | _ -> mk_lexp (LE_id id)
   in
 
   let rewrite_funcl id pat guard exp =
@@ -407,7 +408,7 @@ let rewrite_mutated_parameters =
           | _ -> E_aux (E_block (assignments @ [exp]), l)
         in
         let pat = map_pat rewrite_arg_names pat in
-        (id, map_pat rewrite_arg_names pat, Util.option_map rewrite_exp guard, rewrite_exp exp)
+        (id, map_pat rewrite_arg_names pat, Option.map rewrite_exp guard, rewrite_exp exp)
       end
   in
   map_fundefs rewrite_funcl
@@ -419,7 +420,7 @@ let rewrite_mutated_parameters =
    some small power of two *)
 
 let map_valspec f = function
-  | DEF_spec vs -> DEF_spec (f vs)
+  | DEF_aux (DEF_val vs, a) -> DEF_aux (DEF_val (f vs), a)
   | def -> def
 
 let map_valspecs f = map_ast (map_valspec f)
@@ -465,7 +466,7 @@ let rec rewrite_typ_nexp f (Typ_aux (t_aux, l)) =
   | Typ_id id -> rewrap (Typ_id id)
   | Typ_var kid -> rewrap (Typ_var kid)
   | Typ_fn (arg_typs, ret_typ) -> rewrap (Typ_fn (List.map (rewrite_typ_nexp f) arg_typs, rewrite_typ_nexp f ret_typ))
-  | Typ_tup typs -> rewrap (Typ_tup (List.map (rewrite_typ_nexp f) typs))
+  | Typ_tuple typs -> rewrap (Typ_tuple (List.map (rewrite_typ_nexp f) typs))
   | Typ_app (id, args) -> rewrap (Typ_app (id, List.map (rewrite_typ_arg_nexp f) args))
   | Typ_exist (kids, nc, typ) -> rewrap (Typ_exist (kids, nc, rewrite_typ_nexp f typ))
   | Typ_internal_unknown | Typ_bidir _ -> rewrap t_aux
@@ -508,7 +509,7 @@ let int_leaves exp =
 
 let rewrite_int_select id defs =
   let rec rewrite_block = function
-    | (E_aux (E_assign (LEXP_aux (LEXP_cast (_, id'), _), exp), _) as assignment :: exps)
+    | (E_aux (E_assign (LE_aux (LE_typ (_, id'), _), exp), _) as assignment :: exps)
          when Id.compare id id' == 0 ->
        begin
          match int_leaves exp with
@@ -557,13 +558,13 @@ let rewrite_pointless_block_return defs =
 let rec is_undefined (E_aux (aux, _)) =
   match aux with
   | E_lit (L_aux (L_undef, _)) -> true
-  | E_cast (_, exp) -> is_undefined exp
+  | E_typ (_, exp) -> is_undefined exp
   | _ -> false
 
-let lexp_id (LEXP_aux (aux, _)) =
+let lexp_id (LE_aux (aux, _)) =
   match aux with
-  | LEXP_cast (_, id) -> Some id
-  | LEXP_id id -> Some id
+  | LE_typ (_, id) -> Some id
+  | LE_id id -> Some id
   | _ -> None
 
 let eventually_constant defs =
@@ -585,7 +586,7 @@ let eventually_constant defs =
   in
   let is_assigning_match id (E_aux (aux, _)) =
     match aux with
-    | E_case (_, pexps) -> List.for_all (is_assigning_pexp id) pexps
+    | E_match (_, pexps) -> List.for_all (is_assigning_pexp id) pexps
     | _ -> false
   in
 
@@ -672,7 +673,7 @@ let vector_exps defs =
 
 let rewrite_make_unique defs =
   let rewrite_funcl funcl_id pat guard exp =
-    (funcl_id, pat, Util.option_map (locate unique) guard, locate unique exp)
+    (funcl_id, pat, Option.map (locate unique) guard, locate unique exp)
   in
   map_fundefs rewrite_funcl defs
 
@@ -697,19 +698,19 @@ let rec blocks (E_aux (aux, _) as exp) =
      blocks exp1 @ blocks exp2 @ blocks exp3
   | E_for (_, exp1, exp2, exp3, _, exp4) | E_vector_update_subrange (exp1, exp2, exp3, exp4) ->
      blocks exp1 @ blocks exp2 @ blocks exp3 @ blocks exp4
-  | E_cast (_, exp) | E_internal_return exp | E_exit exp | E_throw exp | E_field (exp, _) | E_return exp | E_internal_assume (_, exp) ->
+  | E_typ (_, exp) | E_internal_return exp | E_exit exp | E_throw exp | E_field (exp, _) | E_return exp | E_internal_assume (_, exp) ->
      blocks exp
   | E_assign (_, exp) ->
      blocks exp
   | E_let (lb, exp) ->
      letbind_blocks lb @ blocks exp
-  | E_case (exp, cases) | E_try (exp, cases) ->
+  | E_match (exp, cases) | E_try (exp, cases) ->
      blocks exp @ List.concat (List.map pexp_blocks cases)
   | E_var (_, exp1, exp2) ->
      blocks exp1 @ blocks exp2
   | E_id _ | E_lit _ | E_internal_value _ | E_constraint _ | E_ref _ | E_sizeof _ ->
      []
-  | E_record _ | E_record_update _ -> []
+  | E_struct _ | E_struct_update _ -> []
 and letbind_blocks (LB_aux (LB_val (_, exp), _)) = blocks exp
 and pexp_blocks (Pat_aux (aux, _)) =
   match aux with
@@ -757,7 +758,7 @@ let rewrite_add_constraint l env env_l nc local_ncs ast =
      begin match !function_id with
      | Some id ->
         let add_constraint _id (TypSchm_aux (TypSchm_ts (typq, typ), tq_l)) =
-          let kopts, _ncs = quant_split typq in
+          let kopts, ncs = quant_split typq in
           let conjs = constraint_conj (constraint_simp nc) in
           let open Type_check in
           (* We want to remove any conjunct in the constraint we are
@@ -785,7 +786,13 @@ let rewrite_add_constraint l env env_l nc local_ncs ast =
              if KOptSet.subset (kopts_of_constraint nc) (KOptSet.of_list kopts)
                 && KidSet.for_all (fun tyvar -> Env.shadows tyvar env_l == 0) nc_tyvars
                 && List.length (quant_items typq) > 0 then
-               mk_typschm (mk_typquant (quant_items typq @ [mk_qi_nc nc])) typ
+               (* Now that we are adding a constraint to the val-spec,
+                  double-check whether it makes some of the existing constraints redundant *)
+               let env_nc = Env.add_constraint nc (List.fold_right (Env.add_typ_var l) kopts env) in
+               let nc_needed nc = try not (prove __POS__ env_nc nc) with _ -> true in
+               let ncs = List.filter nc_needed (List.concat (List.map constraint_conj ncs)) in
+               let qis = List.map mk_qi_kopt kopts @ List.map mk_qi_nc (ncs @ [nc]) in
+               mk_typschm (mk_typquant qis) typ
              else
                raise (Not_top_level nc)
           | [] ->
@@ -793,7 +800,7 @@ let rewrite_add_constraint l env env_l nc local_ncs ast =
         in
         begin try
             let is_spec_of_id = function
-              | DEF_spec vs -> Id.compare (id_of_val_spec vs) id = 0
+              | DEF_aux (DEF_val vs, _) -> Id.compare (id_of_val_spec vs) id = 0
               | _ -> false
             in
             if List.exists is_spec_of_id ast.defs then
