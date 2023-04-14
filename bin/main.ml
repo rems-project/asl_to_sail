@@ -577,10 +577,7 @@ let remove_duplicate_def err decls =
 
 let is_duplicate_val_spec (ctx : Translate_asl.ctx) = function
   | Ast.DEF_aux (Ast.DEF_val (Ast.VS_aux (Ast.VS_val_spec (_, id, _, _), _)), _) ->
-     begin match Type_check.Env.get_val_spec id ctx.tc_env with
-       | (_, _) -> true
-       | exception _ -> false
-     end
+     Translate_asl.is_sail_fun_declared ctx.tc_env id
   | _ -> false
 
 let get_fundef_id = function

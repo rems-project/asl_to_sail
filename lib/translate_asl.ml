@@ -424,6 +424,12 @@ let instantiate_sfun_vtyp (id : ASL_AST.ident) (tes : ASL_AST.expr list) =
        | _ -> None
      end
 
+let is_sail_fun_declared env id =
+  begin match Type_check.Env.get_val_spec id env with
+  | (_, _) -> true
+  | exception _ -> false
+  end
+
 (* Collect variables that are used in slice expressions, or in arguments to
    getter and setter functions.  These typically need to be constrained to
    be within certain bounds. *)
@@ -2665,6 +2671,7 @@ let sail_of_encoding ctx opost exec_id vl_exprs exec_args conditional encoding =
   match encoding with
   | (ASL_AST.Encoding_Block (id, _arch, fields, _opcode, guard, _unpreds, stmts, l)) ->
      let decode_id = add_name_prefix "decode" id in
+     let decode_id' = sail_id_of_ident decode_id in
      let args = List.map arg_of_ifield fields in
      let post = Option.value ~default:[] opost in
      let guard_assert = match guard with
@@ -2722,7 +2729,7 @@ let sail_of_encoding ctx opost exec_id vl_exprs exec_args conditional encoding =
          [Stmt_If (Expr_TApply (Ident "ConditionPassed", [], []), body, [], [], Unknown)]
        else body
      in
-     sail_valspec_of_decl ctx decode_id unit_ty args @
+     (if is_sail_fun_declared ctx.tc_env decode_id' then [] else sail_valspec_of_decl ctx decode_id unit_ty args) @
      sail_fundef_of_decl ctx decode_id unit_ty args cond_body @
      sail_decoder_clause ctx encoding
 
@@ -2950,9 +2957,12 @@ let rec sail_of_declaration ctx (decl : ASL_AST.declaration) =
          | ncs -> [List.fold_left nc_and nc_true ncs]
      in
      let exec_id = add_name_prefix "execute" id in
-     sail_valspec_of_decl ~ncs:constraints exec_ctx exec_id unit_ty (vl_args @ exec_args) @
-     sail_fundef_of_decl ~ncs:constraints exec_ctx exec_id unit_ty (vl_args @ exec_args) exec @
-     List.concat (List.map (sail_of_encoding ctx opost exec_id vl_exprs exec_args conditional) encodings)
+     let valspec =
+       if is_sail_fun_declared ctx.tc_env (sail_id_of_ident exec_id) then [] else
+       sail_valspec_of_decl ~ncs:constraints exec_ctx exec_id unit_ty (vl_args @ exec_args)
+     in
+     let fundef = sail_fundef_of_decl ~ncs:constraints exec_ctx exec_id unit_ty (vl_args @ exec_args) exec in
+     valspec @ fundef @ List.concat (List.map (sail_of_encoding ctx opost exec_id vl_exprs exec_args conditional) encodings)
   | Decl_NewMapDefn (_, _, _, _, _)
   | Decl_MapClause (_, _, _, _, _)
   | Decl_NewEventDefn (_, _, _)
