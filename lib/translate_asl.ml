@@ -733,18 +733,18 @@ let bits_typ nexp =
 let expand_typ_synonyms env typ =
   try Type_check.Env.expand_synonyms env typ with _ -> typ
 
-let is_bits_typ ctx typ =
-  match unaux_typ (expand_typ_synonyms ctx.tc_env typ) with
+let is_bits_typ env typ =
+  match unaux_typ (expand_typ_synonyms env typ) with
   | Typ_app (bits, _) when string_of_id bits = "bits" -> true
-  | _ -> Ast_util.is_bitvector_typ (expand_typ_synonyms ctx.tc_env typ)
+  | _ -> Ast_util.is_bitvector_typ (expand_typ_synonyms env typ)
 
-let is_number_typ ctx typ =
-  Option.is_some (Type_check.destruct_numeric (expand_typ_synonyms ctx.tc_env typ))
+let is_number_typ env typ =
+  Option.is_some (Type_check.destruct_numeric (expand_typ_synonyms env typ))
 
-let is_array_typ ctx typ = is_vector_typ (expand_typ_synonyms ctx.tc_env typ)
+let is_array_typ env typ = is_vector_typ (expand_typ_synonyms env typ)
 
-let is_enum ctx id =
-  match Type_check.Env.lookup_id id ctx.tc_env with
+let is_enum env id =
+  match Type_check.Env.lookup_id id env with
   | Enum _ -> true
   | _ -> false
 
@@ -797,8 +797,8 @@ let check_local (test : lvar -> bool) ctx id =
 let is_owned_local = check_local lvar_is_owned
 let is_shared_local = check_local lvar_is_shared
 let is_mutable_local = check_local lvar_is_mutable
-let is_number_local ctx = check_local (fun lvar -> is_number_typ ctx (lvar_typ lvar)) ctx
-let is_bits_local ctx = check_local (fun lvar -> is_bits_typ ctx (lvar_typ lvar)) ctx
+let is_number_local ctx = check_local (fun lvar -> is_number_typ ctx.tc_env (lvar_typ lvar)) ctx
+let is_bits_local ctx = check_local (fun lvar -> is_bits_typ ctx.tc_env (lvar_typ lvar)) ctx
 
 let local_typ ctx id = lvar_typ (Bindings.find id ctx.locals)
 
@@ -1227,6 +1227,11 @@ let is_bitfield_typ env typ =
   | Some id -> Type_check.Env.is_bitfield id env
   | None -> false
 
+let is_enum_typ env typ =
+  match get_typ_id env typ with
+  | Some id -> Ast_util.Bindings.mem id (Type_check.Env.get_enums env)
+  | None -> false
+
 let add_opt_constraint constr env =
   match constr with
   | Some constr -> Type_check.Env.add_constraint constr env
@@ -1279,24 +1284,27 @@ let rec coerce_exp env src_typ dst_typ e =
      | Some src_typ, Some dst_typ ->
         let src_typ' = expand_typ_synonyms env src_typ in
         let dst_typ' = expand_typ_synonyms env dst_typ in
-        begin
-          match get_typ_id env dst_typ' with
-          | Some id ->
-             if Type_check.Env.is_bitfield id env then
-               if is_bitvector_typ src_typ' then
-                 Libsail.Bitfield.construct_bitfield_exp id e
-               else
-                 begin match get_typ_id env src_typ' with
-                   | Some id' when Type_check.Env.is_bitfield id' env && Ast_util.Id.compare id id' <> 0 ->
-                      Libsail.Bitfield.construct_bitfield_exp id (Libsail.Bitfield.get_bits_field e)
-                   | _ -> e
-                 end
-             else e
-          | _ ->
-             if is_bitfield_typ env src_typ' && is_bitvector_typ dst_typ' then
-               Libsail.Bitfield.get_bits_field e
-             else e
-        end
+        if is_bitfield_typ env dst_typ' then
+          let id = Option.get (get_typ_id env dst_typ') in
+          if is_bitvector_typ src_typ' then
+            Libsail.Bitfield.construct_bitfield_exp id e
+          else if is_bitfield_typ env src_typ' then
+            let id' = Option.get (get_typ_id env src_typ') in
+            if Ast_util.Id.compare id id' <> 0 then
+              Libsail.Bitfield.construct_bitfield_exp id (Libsail.Bitfield.get_bits_field e)
+            else e
+          else e
+        else if is_bitfield_typ env src_typ' && is_bits_typ env dst_typ' then
+          Libsail.Bitfield.get_bits_field e
+        else if is_enum_typ env src_typ' && is_number_typ env dst_typ' then
+          let id = Option.get (get_typ_id env src_typ') in
+          let fn = prepend_id "num_of_" id in
+          mk_exp (E_app (fn, [e]))
+        else if is_number_typ env src_typ' && is_enum_typ env dst_typ' then
+          let id = Option.get (get_typ_id env src_typ') in
+          let fn = append_id id "_of_num" in
+          mk_exp (E_app (fn, [e]))
+        else e
      | _ -> e
 
 let measure_none = Measure_aux (Measure_none, Parse_ast.Unknown)
@@ -1456,7 +1464,8 @@ let rec sail_of_expr ctx (expr : ASL_AST.expr) =
        let implicits' = List.map recur implicits in
        mk_exp (E_app (sail_id_of_ident f, args_of_exps (implicits' @ args')))
   | ASL_AST.Expr_Array (e, idx) ->
-     mk_exp (E_vector_access (recur e, recur idx))
+     let idx' = recur idx |> coerce_exp ctx.tc_env (infer_sail_expr_typ ctx idx) (Some int_typ) in
+     mk_exp (E_vector_access (recur e, idx'))
   | ASL_AST.Expr_Tuple es ->
      mk_exp (E_tuple (List.map recur es))
   | ASL_AST.Expr_LitInt i -> mk_lit_exp (L_num (int_of_intLit i))
@@ -1646,7 +1655,8 @@ and sail_of_lexpr ctx (lexpr : ASL_AST.lexpr) =
   | ASL_AST.LExpr_BitTuple les ->
      mk_lexp (LE_vector_concat (List.map recur les))
   | ASL_AST.LExpr_Array (le, e) ->
-     mk_lexp (LE_vector (recur le, sail_of_expr ctx e))
+     let e' = coerce_exp ctx.tc_env (infer_sail_expr_typ ctx e) (Some int_typ) (sail_of_expr ctx e) in
+     mk_lexp (LE_vector (recur le, e'))
   | ASL_AST.LExpr_Write (f, _, args) ->
      mk_lexp (LE_app (sail_id_of_ident f, List.map (sail_of_expr ctx) args))
   | ASL_AST.LExpr_Wildcard
@@ -1706,7 +1716,7 @@ and sail_of_pat ctx (p : ASL_AST.pattern) =
      (mk_pat (P_lit (mk_lit L_true)), None)
   | ASL_AST.Pat_Const id when pprint_ident id = "FALSE" ->
      (mk_pat (P_lit (mk_lit L_false)), None)
-  | ASL_AST.Pat_Const id when is_enum ctx (sail_id_of_ident id) ->
+  | ASL_AST.Pat_Const id when is_enum ctx.tc_env (sail_id_of_ident id) ->
      (mk_pat (P_id (sail_id_of_ident id)), None)
   | ASL_AST.Pat_Const id ->
      let id_exp = mk_exp (E_id (sail_id_of_ident id)) in
@@ -1762,11 +1772,9 @@ and sail_of_ty ctx (ty : ASL_AST.ty) =
   | ASL_AST.Type_Constructor id -> mk_id_typ (sail_type_id_of_ident id)
   | ASL_AST.Type_Bits expr -> bits_typ (nexp_simp (sail_nexp_of_expr ctx expr))
   | ASL_AST.Type_App (id, args) -> app_typ (sail_type_id_of_ident id) (List.map (sail_typ_arg_of_expr ctx) args)
-  | ASL_AST.Type_Array (Index_Range (r1, r2), ty') ->
-     let r1' = ASL_TC.subst_consts_expr ASL_TC.env0 r1 in
-     let r2' = ASL_TC.subst_consts_expr ASL_TC.env0 r2 in
+  | ASL_AST.Type_Array (ixtype, ty') ->
      let (len, ord) =
-       match (nexp_simp (sail_nexp_of_expr ctx r1'), nexp_simp (sail_nexp_of_expr ctx r2')) with
+       match indices_of_ixtype ctx ixtype with
        | (Nexp_aux (Nexp_constant i1, _), Nexp_aux (Nexp_constant i2, _)) ->
           if Big_int.greater i2 i1 then
             (nconstant (Big_int.succ i2), inc_ord)
@@ -1777,8 +1785,22 @@ and sail_of_ty ctx (ty : ASL_AST.ty) =
      in
      vector_typ len ord (recur ty')
   | ASL_AST.Type_Register (i, _) -> bits_typ (nconstant (int_of_intLit i))
-  | ASL_AST.Type_OfExpr _
-  | ASL_AST.Type_Array (_, _) -> failwith ("sail_of_ty: " ^ pp_to_string (ASL_PP.pp_ty ty))
+  | ASL_AST.Type_OfExpr _ -> failwith ("sail_of_ty: " ^ pp_to_string (ASL_PP.pp_ty ty))
+
+and indices_of_ixtype ctx = function
+  | Index_Range (r1, r2) ->
+     let r1' = ASL_TC.subst_consts_expr ASL_TC.env0 r1 in
+     let r2' = ASL_TC.subst_consts_expr ASL_TC.env0 r2 in
+     (nexp_simp (sail_nexp_of_expr ctx r1'),
+      nexp_simp (sail_nexp_of_expr ctx r2'))
+  | Index_Enum id ->
+     let id' = sail_id_of_ident id in
+     let nelems =
+       try
+         List.length (Type_check.Env.get_enum id' ctx.tc_env)
+       with _ -> failwith ("indices_of_ixtype: failed to find enum type " ^ string_of_id id')
+     in
+     (nint 0, nint nelems)
 
 and infer_sail_expr_typ ctx (e : ASL_AST.expr) =
   let recur = infer_sail_expr_typ ctx in
@@ -1801,7 +1823,7 @@ and infer_sail_expr_typ ctx (e : ASL_AST.expr) =
        end
     | Expr_Slices (e', slices) ->
        begin match recur e', int_of_expr (width_of_slices slices) with
-         | Some typ, Some w when is_bits_typ ctx typ ->
+         | Some typ, Some w when is_bits_typ ctx.tc_env typ ->
             (* if is_bits_typ typ then *)
               Some (bits_typ (nconstant w))
             (* else if is_vector_typ typ && Big_int.equal w (Big_int.of_int 1) then
@@ -1812,7 +1834,7 @@ and infer_sail_expr_typ ctx (e : ASL_AST.expr) =
        end
     | Expr_Array (e', _) ->
        begin match recur e' with
-         | Some typ when is_array_typ ctx typ ->
+         | Some typ when is_array_typ ctx.tc_env typ ->
             let (_, _, etyp) = vector_typ_args_of (expand_typ_synonyms ctx.tc_env typ) in
             Some etyp
          | _ -> None
@@ -1856,7 +1878,7 @@ and infer_sail_lexpr_typ ctx (le : ASL_AST.lexpr) =
        Option.map (sail_of_ty ctx) (instantiate_sfun_vtyp f tes)
     | LExpr_Slices (le', slices) ->
        begin match recur le', int_of_expr (width_of_slices slices) with
-         | Some typ, Some w when is_bits_typ ctx typ ->
+         | Some typ, Some w when is_bits_typ ctx.tc_env typ ->
             (* if is_bits_typ typ then *)
               Some (bits_typ (nconstant w))
             (* else if is_vector_typ typ && Big_int.equal w (Big_int.of_int 1) then
@@ -1867,7 +1889,7 @@ and infer_sail_lexpr_typ ctx (le : ASL_AST.lexpr) =
        end
     | LExpr_Array (le', _) ->
        begin match recur le' with
-         | Some typ when is_array_typ ctx typ ->
+         | Some typ when is_array_typ ctx.tc_env typ ->
             let (_, _, etyp) = vector_typ_args_of (expand_typ_synonyms ctx.tc_env typ) in
             Some etyp
          | _ -> None
@@ -2413,13 +2435,13 @@ let rec bitvector_constraints_of_typ ctx typ = match unaux_typ typ with
      arg_ncs @ bitvector_constraints_of_typ ctx ret_typ
   | Typ_tuple typs ->
      List.map (bitvector_constraints_of_typ ctx) typs |> List.concat
-  | Typ_app (_, args) when not (is_bits_typ ctx typ) ->
+  | Typ_app (_, args) when not (is_bits_typ ctx.tc_env typ) ->
      List.map (bitvector_constraints_of_typ_arg ctx) args |> List.concat
   | Typ_exist _ ->
      (* TODO: Get constraints that don't use existentially quantified variables *)
      []
   | _ ->
-     if is_bits_typ ctx typ then
+     if is_bits_typ ctx.tc_env typ then
        let (len, _, _) = vector_typ_args_of (expand_typ_synonyms ctx.tc_env typ) in
        [nc_gteq len (nint 0)]
      else []

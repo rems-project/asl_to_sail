@@ -797,6 +797,8 @@ and convert_ast ?use_patches:(use_patches=true) ctx = function
        report_sail_error ctx decls sail
          (fun _ ->
             let sail = Sail_to_sail.rewrite_make_unique sail in
+
+            (* Type-check *)
             let checked_sail, sail, env = iterate_check 0 ctx.tc_env sail in
 
             let fun_ids = List.concat (List.map get_fundef_id checked_sail.defs) in
@@ -813,6 +815,24 @@ and convert_ast ?use_patches:(use_patches=true) ctx = function
 
             if List.exists (fun f -> List.mem (string_of_id f) !stop_at) fun_ids
             then raise (Asl_type_error (sail, Parse_ast.Unknown, "Asked to stop here"));
+
+            (* Generate enum functions and add them to the environment.
+               We might use them when translating enum-indexed arrays. *)
+            let vals_in_env =
+              Type_check.Env.get_val_specs ctx.tc_env
+              |> Bindings.bindings |> List.map fst |> IdSet.of_list
+            in
+            let vals_in_defs = val_spec_ids (sail.defs) in
+            let vals = IdSet.union vals_in_env vals_in_defs in
+            let is_new_val = function
+              | Ast.DEF_aux (DEF_val vs, _) -> not (IdSet.mem (id_of_val_spec vs) vals)
+              | _ -> false
+            in
+            let _, env =
+              Initial_check.generate_enum_functions vals sail.defs
+              |> List.filter is_new_val
+              |> Type_check.check_defs env
+            in
 
             let ctx = { ctx with tc_env = env } in
             let (checked_sail', sail', ctx) = convert_ast ~use_patches ctx rest in
