@@ -101,7 +101,7 @@ let builtins = StringSet.of_list [
   "eq_enum"; "ne_enum";
   "Min"; "Max"; "Abs";
   "RoundTowardsZero";
-  "Zeros"; "Ones"; "IsZero"; "IsOnes"; "ZeroExtend"; "SignExtend";
+  "Zeros"; "Ones"; "IsZero"; "IsOnes"; "ZeroExtend"; "SignExtend"; "Align";
   "UInt"; "SInt";
   "Replicate";
   "print"; "println";
@@ -2237,14 +2237,16 @@ and sail_block_of_stmts (ctx : ctx) (stmts : ASL_AST.stmt list) : uannot exp lis
      let constrained_muts = constrained_vars_of_stmts ctx [stmt] in
      let stmt' = sail_of_stmt_rebinds stmt_ctx constrained_muts stmt in
      (* Re-bind variables that are modified the last time as immutables after stmt *)
-     let new_immutables =
-       IdentSet.diff (assigned_vars_of_stmts [stmt]) (assigned_vars_of_stmts stmts)
-       |> IdentSet.filter (is_number_local ctx)
-       |> IdentSet.filter (is_owned_local ctx)
-       |> IdentSet.inter (fv_stmts stmts)
-     in
-     let stmts' = sail_block_of_stmts_rebinds ctx new_immutables stmts in
-     stmt' :: stmts'
+     if List.length stmts > 0 then
+       let new_immutables =
+         IdentSet.diff (assigned_vars_of_stmts [stmt]) (assigned_vars_of_stmts stmts)
+         |> IdentSet.filter (is_number_local ctx)
+         |> IdentSet.filter (is_owned_local ctx)
+         |> IdentSet.inter (fv_stmts stmts)
+       in
+       let stmts' = sail_block_of_stmts_rebinds ctx new_immutables stmts in
+       stmt' :: stmts'
+     else [stmt']
   | [] ->
      [mk_lit_exp L_unit]
 
@@ -2712,6 +2714,7 @@ let sail_of_encoding ctx opost exec_id vl_exprs exec_args conditional encoding =
      let exec_args' = List.map (fun (_, v) -> Expr_Var v) exec_args in
      let constraints = int_constraints_of_stmts decode_body in
      let constraints = int_constraints_of_stmts ~known_vars:constraints decode_body in
+     let constraints = int_constraints_of_stmts ~known_vars:constraints decode_body in
      let is_vl_read_for_split expr =
        match is_vl_read expr with Some "VL" | Some "SVL" -> true | _ -> false
      in
@@ -2930,6 +2933,7 @@ let rec sail_of_declaration ctx (decl : ASL_AST.declaration) =
               up assignments of values that depend on previously constrained
               variables. *)
            let ics = int_constraints_of_stmts stmts in
+           let ics = int_constraints_of_stmts ~known_vars:ics stmts in
            let ics = int_constraints_of_stmts ~known_vars:ics stmts in
            Bindings.filter exec_arg_needed ics
            (* Usually we would only use constraints for variables that are

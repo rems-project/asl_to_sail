@@ -71,10 +71,6 @@ val emod_nat = pure {
   coq: "ZEuclid.modulo"
 } : forall 'n 'm, 'n >= 0 & 'm > 0. (int('n), int('m)) -> int(mod('n, 'm))
 
-// TODO
-val fdiv_int = pure {lem: "integerDiv"} : (int, int) -> int
-val fmod_int = pure {lem: "integerMod"} : (int, int) -> int
-
 overload DIV = {ediv_nat, fdiv_int}
 overload MOD = {emod_nat, fmod_int}
 overload QUOT = {tdiv_int}
@@ -171,8 +167,6 @@ val sub_bits_int = pure {c:"sub_bits_int", _: "sub_vec_int"} : forall 'n, 'n > 0
 
 overload operator - = {sub_bits, sub_bits_int}
 
-val xor_vec = pure {c: "xor_bits", _: "xor_vec"} : forall 'n, 'n >= 0. (bits('n), bits('n)) -> bits('n)
-
 overload AND = {and_vec}
 overload OR = {or_vec}
 overload EOR = {xor_vec}
@@ -205,6 +199,14 @@ overload SetSlice = {set_slice_bits}
 overload RoundDown = {floor}
 
 overload RoundUp = {ceil}
+
+val Align_int = pure { lem: "align_int" } : (int, int) -> int
+function Align_int(x, y) = (DIV(x, y) * y)
+
+val Align_bits = pure { lem: "align_bits" } : forall 'n, 'n >= 0. (bits('n), int) -> bits('n)
+function Align_bits(x, y) = Slice(Align_int(unsigned(x), y), 0, sizeof('n))
+
+overload Align = {Align_bits, Align_int}
 
 val RoundTowardsZero : real -> int
 function RoundTowardsZero(r) = if r < to_real(0) then RoundUp(r) else RoundDown(r)
@@ -299,8 +301,16 @@ function __UNKNOWN_string() : unit -> string = undefined
 function __UNKNOWN_bit() : unit -> bits(1) = undefined
 function __UNKNOWN_signal() : unit -> signal = undefined
 
-type is_VL('vl : Int) -> Bool = (128 <= 'vl <= 2048 & mod('vl, 128) == 0)
-type is_PL('pl : Int) -> Bool = (16 <= 'pl <= 256 & mod('pl, 16) == 0)
+/* From A1.4 ("Supported data types") of ARM DDI 0487J.a:
+   "An SVE scalable vector register has an IMPLEMENTATION DEFINED width that
+   is a power of two, from a minimum of 128 bits up to a maximum of 2048 bits." */
+type is_VL('vl : Int) -> Bool = ('vl in {128, 256, 512, 1024, 2048})
+/* "An SVE predicate register has an IMPLEMENTATION DEFINED width that is a
+   power of two, from a minimum of 16 bits up to a maximum of 256 bits." */
+type is_PL('pl : Int) -> Bool = ('pl in {16, 32, 64, 128, 256})
+
+type vector_length = {'vl, is_VL('vl). int('vl)}
+type predicate_length = {'pl, is_PL('pl). int('pl)}
 
 val PL_of_VL : forall 'vl, 'vl >= 0. int('vl) -> int(div('vl, 8))
 
@@ -317,14 +327,14 @@ function __ReadMemory0(n, addr) = {
   result
 }
 // TODO: like the ASL, we don't try to do transactions yet
-val __ReadMemory1 : forall 'n, 'n >= 0. (int('n), bits(52), bool) -> bits(8 * 'n)
+val __ReadMemory1 : forall 'n, 'n >= 0. (int('n), bits(56), bool) -> bits(8 * 'n)
 function __ReadMemory1(n, addr, transactional) = __ReadMemory0(n, ZeroExtend(addr))
 overload __ReadMemory = { __ReadMemory0, __ReadMemory1 }
 
 val __WriteMemory0 = monadic {lem: "__WriteMemory"} : forall 'n, 'n >= 0. (int('n), bits(56), bits(8 * 'n)) -> unit
 function __WriteMemory0(n, addr, value) = ___WriteRAM(56, n, sail_zeros(56), addr, value)
 // TODO: similarly, but we don't even attempt what the ASL currently has
-val __WriteMemory1 : forall 'n, 'n >= 0. (int('n), bits(52), bits(8 * 'n), bool) -> unit
+val __WriteMemory1 : forall 'n, 'n >= 0. (int('n), bits(56), bits(8 * 'n), bool) -> unit
 function __WriteMemory1(n, addr, value, transactional) = __WriteMemory0(n, ZeroExtend(addr), value)
 overload __WriteMemory = { __WriteMemory0, __WriteMemory1 }
 

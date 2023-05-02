@@ -194,14 +194,14 @@ let is_clause_decl = function
   | Decl_MapClause (_, _, _, _, _) -> true
   | _ -> false
 
-(*let is_var_decl = function
+let is_var_decl = function
   | Decl_Var (_, _, _)
   | Decl_Config (_, _, _, _) -> true
   | _ -> false
 
 let is_const_decl = function
   | Decl_Const (_, _, _, _) -> true
-  | _ -> false*)
+  | _ -> false
 
 let is_type_decl = function
   | Decl_BuiltinType (_, _)
@@ -461,9 +461,12 @@ let get_chunks ?previous_chunks:(pc=StringMap.empty) decls =
     | [_] -> [chunk]
     | _ ->
        (* Mutually recursive declarations; partition into
-          val-specs, then definitions *)
-       let (val_decls, decls) = List.partition is_val_decl (chunk_decls chunk) in
-       List.map singleton_chunk (val_decls @ decls)
+          type-defs, val-specs, then definitions *)
+       let (type_decls, decls) = List.partition is_type_decl (chunk_decls chunk) in
+       let (const_decls, decls) = List.partition is_const_decl decls in
+       let (var_decls, decls) = List.partition is_var_decl decls in
+       let (val_decls, decls) = List.partition is_val_decl decls in
+       List.map singleton_chunk (type_decls @ const_decls @ var_decls @ val_decls @ decls)
   in
   List.concat (List.map chunks_of_component components)
   |> List.filter (fun c -> not (is_empty_chunk c))
