@@ -679,7 +679,7 @@ let rec interact ?use_patches:(use_patches=true) ctx sail chunk rest =
        interact ~use_patches ctx sail chunk rest
      end
 
-and iterate_check n env sail =
+and iterate_check ?(modify_val_specs=true) n env sail =
   let open Type_check in
   try
     let checked_sail, env = check env sail in
@@ -694,7 +694,7 @@ and iterate_check n env sail =
             when not (prove __POS__ env' (nc_not nc)) ->
              begin
                try
-                 Sail_to_sail.rewrite_add_constraint l env env' nc ncs sail
+                 Sail_to_sail.rewrite_add_constraint ~modify_val_spec:modify_val_specs l env env' nc ncs sail
                with
                | Type_error (_, _, err) ->
                   prerr_endline Util.(Type_error.string_of_type_error err |> red |> clear);
@@ -708,12 +708,12 @@ and iterate_check n env sail =
              sail
         in
         let sail = List.fold_left fix_quant sail quants in
-        iterate_check (n + 1) env sail
+        iterate_check ~modify_val_specs (n + 1) env sail
      | None ->
         if List.exists (is_duplicate_def err) sail.defs then begin
           print_endline "Warning: Duplicate definitions!";
           let sail' = { sail with defs = remove_duplicate_def err sail.defs } in
-          iterate_check (n + 1) env sail'
+          iterate_check ~modify_val_specs (n + 1) env sail'
         end else
           raise (Asl_type_error (sail, l, Type_error.string_of_type_error err))
      end
@@ -727,13 +727,15 @@ and convert_ast ?use_patches:(use_patches=true) ctx = function
   | (chunk :: rest) ->
      begin
        let (is_forward, decls) = (is_val_chunk chunk, chunk_decls chunk) in
+       let has_patch = Sys.file_exists (patch_file is_forward chunk) in
+       let has_val_spec_patch = Sys.file_exists (patch_file true chunk) in
 
        incr done_chunks;
        if is_forward then print_string (green "F ") else ();
        if not !quiet then print_endline (emph "Processing top" ^ " (" ^ string_of_int !done_chunks ^ "/" ^ string_of_int !num_chunks ^ "): " ^ name_of_chunk chunk);
 
        let sail =
-         if use_patches && Sys.file_exists (patch_file is_forward chunk)
+         if use_patches && has_patch
          then
            let sail = concat_ast (List.map (Translate_asl.ast_of_declaration ctx) decls) in
            (* let sail = Sail_to_sail.rewrite_overloaded_top sail in *)
@@ -750,7 +752,7 @@ and convert_ast ?use_patches:(use_patches=true) ctx = function
               print_endline (bold "\nFailed to parse patch file: " ^ patch_file is_forward chunk);
               Reporting.print_error e;
               exit 1
-         else if use_patches && Sys.file_exists (patch_file true chunk)
+         else if use_patches && has_val_spec_patch
          then
            (* Try loading val-specs from the patch file, but translate the remaining decls from ASL *)
            try
@@ -799,7 +801,8 @@ and convert_ast ?use_patches:(use_patches=true) ctx = function
             let sail = Sail_to_sail.rewrite_make_unique sail in
 
             (* Type-check *)
-            let checked_sail, sail, env = iterate_check 0 ctx.tc_env sail in
+            let modify_val_specs = not (has_patch || has_val_spec_patch) in
+            let checked_sail, sail, env = iterate_check ~modify_val_specs 0 ctx.tc_env sail in
 
             let fun_ids = List.concat (List.map get_fundef_id checked_sail.defs) in
 

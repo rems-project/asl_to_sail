@@ -682,6 +682,58 @@ let is_unique_in_exp n exp =
   ignore (locate (fun l -> match l with Parse_ast.Unique (m, _) when n = m -> found := true; l | _ -> l) exp);
   !found
 
+let is_unique_in_pexp n pexp =
+  let (_, _, exp, _) = destruct_pexp pexp in
+  is_unique_in_exp n exp
+
+let rec is_flow_condition env exp = match unaux_exp exp with
+  | E_constraint _ -> true
+  | E_lit (L_aux (L_true, _)) | E_lit (L_aux (L_false, _)) | E_lit (L_aux (L_num _, _)) -> true
+  | E_app (op, [x; y]) ->
+     let funs = ["or_bool"; "and_bool"; "gteq_int"; "lteq_int"; "gt_int"; "lt_int"; "eq_int"; "neq_int"] in
+     let binops = ["|"; "&"; ">="; "<="; ">"; "<"; "=="; "!="] |> List.map (fun o -> "(operator " ^ o ^ ")") in
+     List.mem (string_of_id op) (funs @ binops)
+     && is_flow_condition env x && is_flow_condition env y
+  | E_id id ->
+     begin match Env.lookup_id id env with
+       | Local (Immutable, typ) ->
+          begin
+            try
+              Option.is_some (destruct_atom_nexp env typ)
+              || Option.is_some (destruct_atom_bool env typ)
+            with _ -> false
+          end
+       | _ -> false
+     end
+  | _ -> false
+
+let loc_in_exp_with_incomplete_flow_typing env n exp =
+  let incomplete = ref false in
+  let e_if (cond, e_then, e_else) =
+    let loc_found = is_unique_in_exp n e_then || is_unique_in_exp n e_else in
+    if loc_found && not (is_flow_condition env cond) then incomplete := true;
+    E_if (cond, e_then, e_else)
+  in
+  let e_case (e, clauses) =
+    if List.exists (is_unique_in_pexp n) clauses then incomplete := true;
+    E_match (e, clauses)
+  in
+  let open Libsail.Rewriter in
+  ignore (fold_exp { id_exp_alg with e_if; e_case } exp);
+  !incomplete
+
+let loc_in_pexp_with_incomplete_flow_typing env n pexp =
+  let (_, _, exp, _) = destruct_pexp pexp in
+  loc_in_exp_with_incomplete_flow_typing env n exp
+
+let loc_in_funcl_with_incomplete_flow_typing env n (FCL_aux (FCL_funcl (_, pexp), _)) =
+  loc_in_pexp_with_incomplete_flow_typing env n pexp
+
+let loc_in_def_with_incomplete_flow_typing env n = function
+  | DEF_aux (DEF_fundef (FD_aux (FD_function (_, _, funcls), _)), _) ->
+     List.exists (loc_in_funcl_with_incomplete_flow_typing env n) funcls
+  | _ -> false
+
 (* [blocks exp] returns a list of all the E_block expressions in exp *)
 let rec blocks (E_aux (aux, _) as exp) =
   match aux with
@@ -725,6 +777,11 @@ let insert_into_block n insertion defs =
     | e :: es -> e :: insert_into_exps es
     | [] -> []
   in
+  let ensure_block (E_aux (aux, annot) as exp) =
+    match aux with
+    | E_block _ -> exp
+    | _ -> E_aux (E_block [exp], annot)
+  in
   let rewrite_exp (E_aux (aux, annot) as exp) =
     match aux with
     | E_block exps ->
@@ -735,6 +792,11 @@ let insert_into_block n insertion defs =
          exp
        else
          E_aux (E_block (insert_into_exps exps), annot)
+    | E_if (cond, then_exp, else_exp) ->
+       let needs_block e = is_unique_in_exp n e && not (List.exists (is_unique_in_exp n) (blocks e)) in
+       let then_exp' = if needs_block then_exp then ensure_block then_exp else then_exp in
+       let else_exp' = if needs_block else_exp then ensure_block else_exp else else_exp in
+       E_aux (E_if (cond, then_exp', else_exp'), annot)
     | _ -> exp
   in
   let map_exps = map_exp { id_alg with f_exp = rewrite_exp } in
@@ -742,7 +804,7 @@ let insert_into_block n insertion defs =
 
 exception Not_top_level of n_constraint;;
 
-let rewrite_add_constraint l env env_l nc local_ncs ast =
+let rewrite_add_constraint ?(modify_val_spec=true) l env env_l nc local_ncs ast =
   (* prerr_endline "Calling rewrite_add_constraint"; *)
   match l with
   | Parse_ast.Unique (n, _) ->
@@ -803,7 +865,12 @@ let rewrite_add_constraint l env env_l nc local_ncs ast =
               | DEF_aux (DEF_val vs, _) -> Id.compare (id_of_val_spec vs) id = 0
               | _ -> false
             in
-            if List.exists is_spec_of_id ast.defs then
+            (* Check whether the location with the missing constraint is nested
+               under a potentially incomplete flow mapping, in which case we
+               should not attach the constraint to the val-spec. *)
+            let incomplete_flows = List.exists (loc_in_def_with_incomplete_flow_typing env_l n) ast.defs in
+
+            if List.exists is_spec_of_id ast.defs && modify_val_spec && not incomplete_flows then
               map_valspecs (map_valspec_typschm add_constraint) ast
             else
               insert_into_funbody nc
