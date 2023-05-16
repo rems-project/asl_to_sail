@@ -148,14 +148,13 @@ let read_mono_splits_file filename =
    instructions that use them, which seems to be the intention.
  *)
 
-let vl_read_id = ASL_AST.FIdent("VL.read", 0)
-let svl_read_id = ASL_AST.FIdent("SVL.read", 0)
-let pl_read_id = ASL_AST.FIdent("PL.read", 0)
+let vl_read_id = ASL_AST.FIdent("CurrentVL.read", 0)
+let svl_read_id = ASL_AST.FIdent("CurrentSVL.read", 0)
 let pl_of_vl_id = ASL_AST.Ident("PL_of_VL")
 
 let is_vl_read = function
-  | Expr_TApply (FIdent ("VL.read", _), _, _) -> Some "VL"
-  | Expr_TApply (FIdent ("SVL.read", _), _, _) -> Some "SVL"
+  | Expr_TApply (FIdent (("VL.read" | "CurrentVL.read"), _), _, _) -> Some "VL"
+  | Expr_TApply (FIdent (("SVL.read" | "CurrentSVL.read"), _), _, _) -> Some "SVL"
   | Expr_TApply (FIdent ("PL.read", _), _, _) -> Some "PL"
   | Expr_TApply (pl_of_vl, _, [vl]) when Id.compare pl_of_vl pl_of_vl_id = 0 ->
      begin match vl with
@@ -174,11 +173,9 @@ let is_vl_read = function
    (defaults to multiples of 128 up to 2048). *)
 
 let mono_vl = ref false
+let bind_vl_ariths = ref false
 
-let implemented_vls = ref [
-  128; 256; 384; 512; 640; 768; 896; 1024;
-  1152; 1280; 1408; 1536; 1664; 1792; 1920; 2048
-]
+let implemented_vls = ref [128; 256; 512; 1024; 2048]
 
 let vl_expr bind_ariths expr = match expr with
   | Expr_TApply (mul_int, _, [var; Expr_LitInt i])
@@ -230,7 +227,8 @@ class vlExprsClass bind_ariths = object
   inherit LibASL.Asl_visitor.nopAslVisitor
 
   val mutable vl_exprs = ExprMap.empty
-  val mutable vl_derived = LibASL.Asl_utils.Bindings.empty
+  val mutable vl_derived = ASL_Utils.Bindings.empty
+  val mutable vl_aliases = ASL_Utils.Bindings.empty
   method result = vl_exprs
   method! vexpr expr =
     match vl_expr bind_ariths expr with
@@ -248,15 +246,22 @@ class vlExprsClass bind_ariths = object
     match stmt with
     | Stmt_VarDecl (Type_Constructor (Ident "integer"), ident,
                     (Expr_TApply (div_int, _, [var; divisor]) as expr), _)
+    | Stmt_ConstDecl (Type_Constructor (Ident "integer"), ident,
+                      (Expr_TApply (div_int, _, [var; divisor]) as expr), _)
          when name_of_ident div_int = "fdiv_int" ->
        let divisor = match divisor with
          | Expr_LitInt i -> Some (nconstant (Big_int.of_string i))
          | Expr_Var v -> Some (nvar (mk_kid (name_of_ident v)))
          | _ -> None
        in
-       begin match is_vl_read var, divisor with
+       let vl_var = match var with
+         | Expr_Var ident when ASL_Utils.Bindings.mem ident vl_aliases ->
+            Some (ASL_Utils.Bindings.find ident vl_aliases)
+         | _ -> is_vl_read var
+       in
+       begin match vl_var, divisor with
        | Some var, Some divisor ->
-          vl_derived <- LibASL.Asl_utils.Bindings.add ident (var, divisor, expr) vl_derived;
+          vl_derived <- ASL_Utils.Bindings.add ident (var, divisor, expr) vl_derived;
           DoChildren
        | _,_ -> DoChildren
        end
@@ -268,19 +273,26 @@ class vlExprsClass bind_ariths = object
          when name_of_ident mul_int = "mul_int" && name_of_ident mul_int' = "mul_int" &&
                 Id.compare ident ident' == 0 ->
        let mul_nexp = match mul_expr with
-         | Expr_LitInt i -> Some (nconstant (Big_int.of_string i))
-         | Expr_Var v -> Some (nvar (mk_kid (name_of_ident v)))
+         | Expr_LitInt i -> Some (nconstant (Big_int.of_string i), i)
+         | Expr_Var v -> Some (nvar (mk_kid (name_of_ident v)), name_of_ident v)
          | _ -> None
        in
-       begin match LibASL.Asl_utils.Bindings.find_opt ident vl_derived, mul_nexp with
-       | Some (id, divisor, derived_expr), Some mul_nexp ->
-          let var = name_of_ident ident ^ "_mul_mul" in
+       begin match ASL_Utils.Bindings.find_opt ident vl_derived, mul_nexp with
+       | Some (id, divisor, derived_expr), Some (mul_nexp, mul_string) ->
+          let var = name_of_ident ident ^ "_" ^ name_of_ident ident ^ "_" ^ mul_string in
           let nexp_ident = napp (mk_id "div") [nvar (mk_kid id); divisor] in
           let nc = nc_eq (nvar (mk_kid var)) (ntimes (nexp_ident) (ntimes (nexp_ident) (mul_nexp))) in
           let expr' = Expr_TApply (mul_int, [], [Expr_TApply (mul_int, [], [derived_expr; derived_expr]); mul_expr]) in
           vl_exprs <- ExprMap.add expr (Ident var, expr', nc) vl_exprs;
           DoChildren
        | _,_ -> DoChildren
+       end
+    | Stmt_ConstDecl (Type_Constructor (Ident "integer"), ident, expr, _) ->
+       begin match is_vl_read expr with
+       | Some var ->
+          vl_aliases <- ASL_Utils.Bindings.add ident var vl_aliases;
+          DoChildren
+       | None -> DoChildren
        end
     | _ -> DoChildren
 end
@@ -315,18 +327,21 @@ let rewrite_pl stmts =
   let re = new replaceExprClass rewrite in
   LibASL.Asl_visitor.visit_stmts re stmts
 
-let subst_vl vl stmts =
+let subst_vl vl_var vl_val stmts =
   let rewrite expr =
-    let pl = vl / 8 in
+    let pl_val = vl_val / 8 in
+    let vl_expr = Expr_LitInt (string_of_int vl_val) in
+    let pl_expr = Expr_LitInt (string_of_int pl_val) in
     match is_vl_read expr with
-    | Some "VL" | Some "SVL" -> Some (Expr_LitInt (string_of_int vl))
-    | Some "PL" -> Some (Expr_LitInt (string_of_int pl))
+    | Some var when var = vl_var -> Some vl_expr
+    | Some "PL" -> Some pl_expr
     | _ ->
        match expr with
        | Expr_TApply (f, _, [vl]) when Id.compare f pl_of_vl_id = 0 ->
           if is_vl_read vl = Some "VL" || vl = Expr_Var (Ident "VL") then
-            Some (Expr_LitInt (string_of_int pl))
+            Some pl_expr
           else None
+       | Expr_Var ident when name_of_ident ident = vl_var -> Some vl_expr
        | _ -> None
   in
   let re = new replaceExprClass rewrite in
@@ -510,7 +525,7 @@ let instantiate_fun_implicits (id : ASL_AST.ident) (tes : ASL_AST.expr list) =
 
 (* Collect variables that are assigned to like in the visitor class defined
    in ASL_Utils, but additionally take into account mutable arguments of
-   setter functions. *)
+   setter functions.  Also don't consider constant declarations. *)
 class assignedVarsClass = object
   inherit ASL_Utils.assignedVarsClass
 
@@ -527,6 +542,9 @@ class assignedVarsClass = object
             DoChildren
          | None -> DoChildren
        end
+    | _ -> DoChildren
+  method! vstmt = function
+    | Stmt_ConstDecl _ -> SkipChildren
     | _ -> DoChildren
 end
 
@@ -2719,15 +2737,16 @@ let sail_of_encoding ctx opost exec_id vl_exprs exec_args conditional encoding =
        match is_vl_read expr with Some "VL" | Some "SVL" -> true | _ -> false
      in
      let split_vls stmt =
-       if !mono_vl && List.exists is_vl_read_for_split vl_exprs then
-         let vl_call = Expr_TApply (vl_read_id, [], []) in
-         let alt vl =
-           let vl' = string_of_int vl in
-           let call' = subst_vl vl [stmt] in
-           Alt_Alt ([Pat_LitInt vl'], None, call')
-         in
-         Stmt_Case (vl_call, List.map alt !implemented_vls, None, l)
-       else stmt
+       match List.find_opt is_vl_read_for_split vl_exprs with
+       | Some vl_expr when !mono_vl ->
+          let vl_var = Option.get (is_vl_read vl_expr) in
+          let alt vl_val =
+            let vl_val' = string_of_int vl_val in
+            let call' = subst_vl vl_var vl_val [stmt] in
+            Alt_Alt ([Pat_LitInt vl_val'], None, call')
+          in
+          Stmt_Case (vl_expr, List.map alt !implemented_vls, None, l)
+       | _ -> stmt
      in
      let split_var var stmt =
        let error_msg = "Failed to split variable " ^ name_of_ident var ^ " in decode " ^ name_of_ident id in
@@ -2913,7 +2932,7 @@ let rec sail_of_declaration ctx (decl : ASL_AST.declaration) =
      in
      (* Bind expressions involving global type variable VL *)
      let exec = rewrite_pl exec in
-     let vl_bindings = vl_exprs_of_stmts true exec in
+     let vl_bindings = vl_exprs_of_stmts !bind_vl_ariths exec in
      let vl_args = List.map (fun (_, id, _, _) -> (ASL_TC.type_integer, id)) vl_bindings in
      let vl_exprs = List.map (fun (_, _, expr, _) -> expr) vl_bindings in
      let vl_ncs = List.map (fun (_, _, _, nc) -> nc) vl_bindings in

@@ -86,6 +86,9 @@ let options = Arg.align ([
   ( "-mono_vl",
     Arg.Set Translate_asl.mono_vl,
     " enable monomorphisation of VL in decode clauses");
+  ( "-bind_vl_ariths",
+    Arg.Set Translate_asl.bind_vl_ariths,
+    " pull arithmetic expressions involving vector lengths out into parameters of functions");
   ( "-implemented_vls",
     Arg.String (fun l -> Translate_asl.implemented_vls := List.map int_of_string (String.split_on_char ',' l)),
     " set supported values of VL");
