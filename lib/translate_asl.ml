@@ -2650,6 +2650,52 @@ let and_bool_opt exp1 exp2 = match (exp1, exp2) with
 
 let decoder_num = ref Big_int.zero
 
+(* Top-level decode patterns to split the decoders up into more mangeable functions. *)
+
+let split_A64 = [
+  "0xx0000", "_Reserved";
+  "1xx0000", "_SME";
+  "xxx0001", "_Unallocated1";
+  "xxx0010", "_SVE";
+  "xxx0011", "_Unallocated2";
+  "xxx100x", "_DataProcImm";
+  "xxx101x", "_BranchExcSys";
+  "xxxx1x0", "_LoadStore";
+  "xxxx101", "_DataProcReg";
+  "xxxx111", "_DataProcFPSIMD";
+]
+
+let split_A32 = [
+  "11110xx", "_Unconditional";
+  "xxxx00x", "_DataProMisc";
+  "xxxx010", "_LoadStoreImmLit";
+  "xxxx011xxxxxxxxxxxxxxxxxxxx0xxxx", "_LoadStoreReg";
+  "xxxx011xxxxxxxxxxxxxxxxxxxx1xxxx", "_Media";
+  "xxxx10x", "_BranchBlock";
+  "xxxx11x", "_SysASIMDFP";
+]
+
+let decode_split arch opcode =
+  let split splits =
+    let opcode = match opcode with
+      | Opcode_Bits bits -> Util.string_to_list bits
+      | Opcode_Mask mask -> Util.string_to_list mask
+    in
+    let rec check prefix opcode =
+      match prefix, opcode with
+      |      [],       _ -> true
+      | '0'::t1, '0'::t2 -> check t1 t2
+      | '1'::t1, '1'::t2 -> check t1 t2
+      | 'x'::t1,   _::t2 -> check t1 t2
+      | _,   _   -> false
+    in
+    snd (List.find (fun (prefix,_) -> check (Util.string_to_list prefix) opcode) splits)
+  in
+  match arch with
+  | Ident "A64" -> split split_A64
+  | Ident "A32" -> split split_A32
+  | _ -> ""
+
 (* Generate clause for the global decode function
    TODO: Add back optional generation and use of an AST datatype
  *)
@@ -2704,7 +2750,8 @@ let sail_decoder_clause ctx = function
      let body = mk_exp (E_block (see_update @ [List.fold_right bind_field getters decode_stmt'])) in
      let clause_pat = mk_pat (P_tuple [mk_pat (P_id (mk_id "pc")); mk_pat (P_as (pat, mk_id opcode_name))]) in
      let pexp = construct_pexp (clause_pat, clause_guard) body in
-     let decoder_id = mk_id ("__Decode" ^ pprint_ident arch) in
+     let decode_suffix = decode_split arch opcode in
+     let decoder_id = mk_id ("__Decode" ^ pprint_ident arch ^ decode_suffix) in
      let a = (mk_def_annot Parse_ast.Unknown, empty_uannot) in
      let sdfuncl = SD_funcl (FCL_aux (FCL_funcl (decoder_id, pexp), a)) in
      [mk_def (DEF_scattered (SD_aux (sdfuncl, no_annot)))]
