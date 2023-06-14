@@ -124,6 +124,10 @@ let rec map_pat f (P_aux (p_aux, l)) =
   | P_tuple pats ->
      let p_aux = P_tuple (List.map (map_pat f) pats) in
      f (rewrap p_aux)
+  | P_struct (fpats, fwild) ->
+     let map_fpat (id, pat) = (id, map_pat f pat) in
+     let p_aux = P_struct (List.map map_fpat fpats, fwild) in
+     f (rewrap p_aux)
   | P_list pats ->
      let p_aux = P_list (List.map (map_pat f) pats) in
      f (rewrap p_aux)
