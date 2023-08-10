@@ -43,6 +43,7 @@ scattered function __DecodeA32_Media
 scattered function __DecodeA32_BranchBlock
 scattered function __DecodeA32_SysASIMDFP
 
+scattered function __DecodeA64
 scattered function __DecodeA32
 scattered function __DecodeT32
 scattered function __DecodeT16

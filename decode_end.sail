@@ -42,7 +42,7 @@ end __DecodeA32_SysASIMDFP
 end __DecodeT32
 end __DecodeT16
 
-function __DecodeA64(pc, opcode) =
+function clause __DecodeA64(pc, opcode) =
   match opcode {
   [bitzero, _, _] @ 0x0 @ _ => __DecodeA64_Reserved(pc, opcode),
   [bitone, _ ,_] @ 0x0 @ _ => __DecodeA64_SME(pc, opcode),
@@ -56,7 +56,7 @@ function __DecodeA64(pc, opcode) =
   [_, _, _, _] @ 0b111 @ _ => __DecodeA64_DataProcFPSIMD(pc, opcode),
   }
 
-function __DecodeA32(pc, opcode) =
+function clause __DecodeA32(pc, opcode) =
   match opcode {
   0b11110 @ _ => __DecodeA32_Unconditional(pc, opcode),
   [_, _, _, _] @ 0b00 @ _ => __DecodeA32_DataProMisc(pc, opcode),
@@ -66,3 +66,6 @@ function __DecodeA32(pc, opcode) =
   [_, _, _, _] @ 0b10 @ _ => __DecodeA32_BranchBlock(pc, opcode),
   [_, _, _, _] @ 0b11 @ _ => __DecodeA32_SysASIMDFP(pc, opcode),
   }
+
+end __DecodeA64
+end __DecodeA32
