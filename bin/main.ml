@@ -944,10 +944,17 @@ let process_event_clauses (ctx : Translate_asl.ctx) decls =
        ASL_File ("event_clauses.asl", decls, checked_ast, ast))
     (fun _ -> exit 1)
 
+(* Library files contain a few $option directives that it's safe for us to
+   ignore at this stage. *)
+let ignored_options = [
+  ("-lem_extern_type", Arg.String (fun _ -> ()), "");
+  ("-coq_extern_type", Arg.String (fun _ -> ()), "");
+]
+
 let process_sail_file ((ctx : Translate_asl.ctx), maps, events, clauses, previous_chunks, previous_files) filename =
   if not !quiet then print_endline ("Reading Sail file " ^ filename);
   let (ast, env, _) =
-    try Libsail.Frontend.load_files !sail_lib_dir [] ctx.tc_env [filename] with
+    try Libsail.Frontend.load_files !sail_lib_dir ignored_options ctx.tc_env [filename] with
     | Reporting.Fatal_error e -> Reporting.print_error e; exit 1
   in
   let previous_files' = previous_files @ [Sail_File (filename, ast)] in
