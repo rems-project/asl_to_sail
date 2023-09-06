@@ -10,6 +10,7 @@ $include <real.sail>
 $include <reverse_endianness.sail>
 $include <option.sail>
 $include <mono_rewrites.sail>
+$include <concurrency_interface.sail>
 
 /* These could be given refined types, if necessary */
 val implies : (bool, bool) -> bool
