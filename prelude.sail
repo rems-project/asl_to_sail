@@ -8,8 +8,8 @@ $include <vector_dec.sail>
 $include <string.sail>
 $include <real.sail>
 $include <reverse_endianness.sail>
+$include <option.sail>
 $include <mono_rewrites.sail>
-$include <regfp.sail>
 
 /* These could be given refined types, if necessary */
 val implies : (bool, bool) -> bool
@@ -315,34 +315,6 @@ type predicate_length = {'pl, is_PL('pl). int('pl)}
 val PL_of_VL : forall 'vl, 'vl >= 0. int('vl) -> int(div('vl, 8))
 
 function PL_of_VL(vl) = DIV(vl, 8)
-
-val ___ReadRAM = monadic "read_ram" : forall 'n 'm.
-  (atom('m), atom('n), bits('m), bits('m)) -> bits(8 * 'n)
-val ___WriteRAM = monadic "write_ram" : forall 'n 'm.
-  (atom('m), atom('n), bits('m), bits('m), bits(8 * 'n)) -> unit
-
-val __ReadMemory0 = monadic {lem: "__ReadMemory"} : forall 'n, 'n >= 0. (int('n), bits(56)) -> bits(8 * 'n)
-function __ReadMemory0(n, addr) = {
-  let result = ___ReadRAM(56, n, sail_zeros(56), addr);
-  result
-}
-// TODO: like the ASL, we don't try to do transactions yet
-val __ReadMemory1 : forall 'n, 'n >= 0. (int('n), bits(56), bool) -> bits(8 * 'n)
-function __ReadMemory1(n, addr, transactional) = __ReadMemory0(n, ZeroExtend(addr))
-overload __ReadMemory = { __ReadMemory0, __ReadMemory1 }
-
-val __WriteMemory0 = monadic {lem: "__WriteMemory"} : forall 'n, 'n >= 0. (int('n), bits(56), bits(8 * 'n)) -> unit
-function __WriteMemory0(n, addr, value) = ___WriteRAM(56, n, sail_zeros(56), addr, value)
-// TODO: similarly, but we don't even attempt what the ASL currently has
-val __WriteMemory1 : forall 'n, 'n >= 0. (int('n), bits(56), bits(8 * 'n), bool) -> unit
-function __WriteMemory1(n, addr, value, transactional) = __WriteMemory0(n, ZeroExtend(addr), value)
-overload __WriteMemory = { __WriteMemory0, __WriteMemory1 }
-
-val __ReadRAM : forall 'a 'n, 0 < 'a <= 56 & 'n >= 0. (int('a), int('n), bits('a), bits('a)) -> bits(8 * 'n)
-function __ReadRAM(a, n, mem, addr) = __ReadMemory(n, sail_zero_extend(addr, 56))
-
-val __WriteRAM : forall 'a 'n, 0 < 'a <= 56 & 'n >= 0. (int('a), int('n), bits('a), bits('a), bits(8 * 'n)) -> unit
-function __WriteRAM(a, n, mem, addr, value) = __WriteMemory(n, sail_zero_extend(addr, 56), value)
 
 val __SleepRequest = monadic {ocaml: "sleep_request", lem: "sleep_request", smt: "sleep_request", interpreter: "sleep_request", c: "sleep_request"}: unit -> unit
 

@@ -2,22 +2,17 @@ open import Pervasives_extra
 open import Sail2_instr_kinds
 open import Sail2_values
 open import Sail2_operators_mwords
-open import Sail2_prompt_monad
-open import Sail2_prompt
-
-val __ReadMemory : forall 'rv 'n 'e. Size 'n => integer -> mword ty56 -> monad 'rv (mword 'n) 'e
-let __ReadMemory n addr = read_mem Read_plain (56:integer) addr n
-val __WriteMemory : forall 'rv 'n 'e. Size 'n => integer -> mword ty56 -> mword 'n -> monad 'rv unit 'e
-let __WriteMemory n addr data = write_mem Write_plain (56:integer) addr n data >>= fun _ -> return ()
+open import Sail2_concurrency_interface
+open import Sail2_monadic_combinators
 
 (* TODO *)
 val putchar : integer -> unit
 let putchar _ = ()
 
-val wakeup_request : forall 'rv 'e. unit -> monad 'rv unit 'e
+val wakeup_request : forall 'abort 'barrier 'cache_op 'fault 'pa 'tlb_op 'translation_summary 'arch_ak 'rv 'e. unit -> monad 'abort 'barrier 'cache_op 'fault 'pa 'tlb_op 'translation_summary 'arch_ak 'rv unit 'e
 let wakeup_request _ = return ()
 
-val sleep_request : forall 'rv 'e. unit -> monad 'rv unit 'e
+val sleep_request : forall 'abort 'barrier 'cache_op 'fault 'pa 'tlb_op 'translation_summary 'arch_ak 'rv 'e. unit -> monad 'abort 'barrier 'cache_op 'fault 'pa 'tlb_op 'translation_summary 'arch_ak 'rv unit 'e
 let sleep_request _ = return ()
 
 type ty288
@@ -256,3 +251,8 @@ type ty131072
 instance (Size ty131072) let size = 131072 end
 declare isabelle target_rep type ty131072 = `131072`
 declare hol target_rep type ty131072 = `131072`
+
+type ty262144
+instance (Size ty262144) let size = 262144 end
+declare isabelle target_rep type ty262144 = `262144`
+declare hol target_rep type ty262144 = `262144`
