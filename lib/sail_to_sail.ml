@@ -479,7 +479,6 @@ and rewrite_typ_arg_nexp f (A_aux (ta_aux, l)) =
   match ta_aux with
   | A_nexp n -> rewrap (A_nexp (f n))
   | A_typ typ -> rewrap (A_typ (rewrite_typ_nexp f typ))
-  | A_order o -> rewrap (A_order o)
   | A_bool nc -> rewrap (A_bool (rewrite_nconstraint_nexp f nc))
 and rewrite_nconstraint_nexp f (NC_aux (nc_aux, l)) =
   let rewrap nc_aux = NC_aux (nc_aux, l) in
