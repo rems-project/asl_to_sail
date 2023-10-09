@@ -1290,7 +1290,7 @@ let rec coerce_exp env src_typ dst_typ e =
             match unaux_exp e with
             | E_vector_access (vec, idx) ->
                let vtyp = Type_check.typ_of (Type_check.infer_exp env vec) in
-               let (_, _, etyp) = vector_typ_args_of vtyp in
+               let (_, etyp) = vector_typ_args_of vtyp in
                Some etyp
             | E_app (f, _) when has_simple_fun_ret_typ f env ->
                get_simple_fun_ret_typ f env
@@ -1791,17 +1791,17 @@ and sail_of_ty ctx (ty : ASL_AST.ty) =
   | ASL_AST.Type_Bits expr -> bits_typ (nexp_simp (sail_nexp_of_expr ctx expr))
   | ASL_AST.Type_App (id, args) -> app_typ (sail_type_id_of_ident id) (List.map (sail_typ_arg_of_expr ctx) args)
   | ASL_AST.Type_Array (ixtype, ty') ->
-     let (len, ord) =
+     let len =
        match indices_of_ixtype ctx ixtype with
        | (Nexp_aux (Nexp_constant i1, _), Nexp_aux (Nexp_constant i2, _)) ->
           if Big_int.greater i2 i1 then
-            (nconstant (Big_int.succ i2), inc_ord)
+            nconstant (Big_int.succ i2) (* The ASL vector had increasing order *)
           else
-            (nconstant (Big_int.succ i1), dec_ord)
+            nconstant (Big_int.succ i1) (* decreasing *)
        | _ ->
           failwith ("sail_of_ty: non-constant range in " ^ pp_to_string (ASL_PP.pp_ty ty))
      in
-     vector_typ len ord (recur ty')
+     vector_typ len (recur ty')
   | ASL_AST.Type_Register (i, _) -> bits_typ (nconstant (int_of_intLit i))
   | ASL_AST.Type_OfExpr _ -> failwith ("sail_of_ty: " ^ pp_to_string (ASL_PP.pp_ty ty))
 
@@ -1853,7 +1853,7 @@ and infer_sail_expr_typ ctx (e : ASL_AST.expr) =
     | Expr_Array (e', _) ->
        begin match recur e' with
          | Some typ when is_array_typ ctx.tc_env typ ->
-            let (_, _, etyp) = vector_typ_args_of (expand_typ_synonyms ctx.tc_env typ) in
+            let (_, etyp) = vector_typ_args_of (expand_typ_synonyms ctx.tc_env typ) in
             Some etyp
          | _ -> None
        end
@@ -1908,7 +1908,7 @@ and infer_sail_lexpr_typ ctx (le : ASL_AST.lexpr) =
     | LExpr_Array (le', _) ->
        begin match recur le' with
          | Some typ when is_array_typ ctx.tc_env typ ->
-            let (_, _, etyp) = vector_typ_args_of (expand_typ_synonyms ctx.tc_env typ) in
+            let (_, etyp) = vector_typ_args_of (expand_typ_synonyms ctx.tc_env typ) in
             Some etyp
          | _ -> None
        end
@@ -2092,8 +2092,8 @@ and sail_of_stmt ctx (stmt : ASL_AST.stmt) =
      let start' = sail_of_expr ctx start in
      let dir' =
        match dir with
-       | Direction_Up -> inc_ord
-       | Direction_Down -> dec_ord
+       | Direction_Up -> Ord_aux (Ord_inc, Unknown)
+       | Direction_Down -> Ord_aux (Ord_dec, Unknown)
      in
      let stop' = sail_of_expr ctx stop in
      let step = mk_lit_exp (L_num (Big_int.of_int 1)) in
@@ -2462,7 +2462,7 @@ let rec bitvector_constraints_of_typ ctx typ = match unaux_typ typ with
      []
   | _ ->
      if is_bits_typ ctx.tc_env typ then
-       let (len, _, _) = vector_typ_args_of (expand_typ_synonyms ctx.tc_env typ) in
+       let (len, _) = vector_typ_args_of (expand_typ_synonyms ctx.tc_env typ) in
        [nc_gteq len (nint 0)]
      else []
 
@@ -2523,7 +2523,7 @@ let sail_typschm_of_funtype ?ncs:(ncs=[]) ctx id ret_ty args =
 let sail_valspec_of_decl ?ncs:(ncs=[]) ctx id ret_ty args =
   let id' = sail_id_of_ident id in
   let typschm = sail_typschm_of_funtype ~ncs:ncs ctx id ret_ty args in
-  [mk_val_spec (VS_val_spec (typschm, id', None, false))]
+  [mk_val_spec (VS_val_spec (typschm, id', None))]
 
 let sail_fundef_of_decl ?ncs:(ncs=[]) ctx id ret_ty args stmts =
   let id' = sail_id_of_ident id in
@@ -2846,7 +2846,7 @@ let unknown_fun id typ =
   let typschm = mk_typschm (mk_typquant []) fun_typ in
   let pat = mk_pat (P_lit (mk_lit L_unit)) in
   let body = mk_lit_exp L_undef in
-  [mk_val_spec (VS_val_spec (typschm, fun_id, None, false));
+  [mk_val_spec (VS_val_spec (typschm, fun_id, None));
    mk_fundef [mk_funcl fun_id pat body]]
 
 let rec sail_of_declaration ctx (decl : ASL_AST.declaration) =
