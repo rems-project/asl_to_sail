@@ -582,7 +582,7 @@ let remove_duplicate_def err decls =
   List.rev (remove_first (is_duplicate_def err) (List.rev decls))
 
 let is_duplicate_val_spec (ctx : Translate_asl.ctx) = function
-  | Ast.DEF_aux (Ast.DEF_val (Ast.VS_aux (Ast.VS_val_spec (_, id, _, _), _)), _) ->
+  | Ast.DEF_aux (Ast.DEF_val (Ast.VS_aux (Ast.VS_val_spec (_, id, _), _)), _) ->
      Translate_asl.is_sail_fun_declared ctx.tc_env id
   | _ -> false
 

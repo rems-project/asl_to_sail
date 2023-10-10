@@ -39,11 +39,11 @@ let rec rename_fundefs n = function
   | def :: defs -> def :: rename_fundefs n defs
   | [] -> []
 
-let rename_valspec_aux f (VS_val_spec (typschm, id, ext, is_cast)) = VS_val_spec (typschm, f id, ext, is_cast)
+let rename_valspec_aux f (VS_val_spec (typschm, id, ext)) = VS_val_spec (typschm, f id, ext)
 
 let rename_valspec f (VS_aux (vs_aux, annot)) = VS_aux (rename_valspec_aux f vs_aux, annot)
 
-let valspec_id (VS_aux (VS_val_spec (_, id, _, _), _)) = id
+let valspec_id (VS_aux (VS_val_spec (_, id, _), _)) = id
 
 let valspec_of_def = function
   | DEF_aux (DEF_val vs, _) -> vs
@@ -429,8 +429,8 @@ let map_valspec f = function
 
 let map_valspecs f = map_ast (map_valspec f)
 
-let map_valspec_typschm f (VS_aux (VS_val_spec (typschm, id, ext, is_cast), l)) =
-  VS_aux (VS_val_spec (f id typschm, id, ext, is_cast), l)
+let map_valspec_typschm f (VS_aux (VS_val_spec (typschm, id, ext), l)) =
+  VS_aux (VS_val_spec (f id typschm, id, ext), l)
 
 let find_pat_index id pats =
   let rec find_pat_index' n id = function

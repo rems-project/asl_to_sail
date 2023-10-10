@@ -1257,7 +1257,7 @@ let add_opt_constraint constr env =
 
 let get_simple_fun_ret_typ id env =
   try
-    let (typq, typ) = Type_check.Env.get_val_spec id env in
+    let (_, typ) = Type_check.Env.get_val_spec id env in
     begin match typ with
       | Typ_aux (Typ_fn (_, ret_typ), _)
         when Ast_util.KidSet.is_empty (Ast_util.tyvars_of_typ ret_typ) ->
@@ -1288,7 +1288,7 @@ let rec coerce_exp env src_typ dst_typ e =
        | None ->
           try
             match unaux_exp e with
-            | E_vector_access (vec, idx) ->
+            | E_vector_access (vec, _) ->
                let vtyp = Type_check.typ_of (Type_check.infer_exp env vec) in
                let (_, _, etyp) = vector_typ_args_of vtyp in
                Some etyp
@@ -2318,7 +2318,7 @@ and sail_of_assignment ctx lexpr expr =
      let expr' = sail_of_expr ctx expr |> coerce_exp ctx.tc_env (infer_sail_expr_typ ctx expr) (Some (bits_typ (nint 1))) in
      let expr'' = mk_exp (E_app (mk_id "Bit", [expr'])) in
      (mk_lexp (LE_vector (inner_le'', idx')), expr'')
-  | LExpr_Slices (LExpr_Var v as inner_le, [Slice_LoWd (low, width) as slice])
+  | LExpr_Slices (LExpr_Var v as inner_le, [Slice_LoWd (low, _) as slice])
     when not (is_constant_expr low) ->
      (* TODO: Handle inner lexprs other than variables *)
      let v' = sail_id_of_ident v in
@@ -2523,7 +2523,7 @@ let sail_typschm_of_funtype ?ncs:(ncs=[]) ctx id ret_ty args =
 let sail_valspec_of_decl ?ncs:(ncs=[]) ctx id ret_ty args =
   let id' = sail_id_of_ident id in
   let typschm = sail_typschm_of_funtype ~ncs:ncs ctx id ret_ty args in
-  [mk_val_spec (VS_val_spec (typschm, id', None, false))]
+  [mk_val_spec (VS_val_spec (typschm, id', None))]
 
 let sail_fundef_of_decl ?ncs:(ncs=[]) ctx id ret_ty args stmts =
   let id' = sail_id_of_ident id in
@@ -2846,7 +2846,7 @@ let unknown_fun id typ =
   let typschm = mk_typschm (mk_typquant []) fun_typ in
   let pat = mk_pat (P_lit (mk_lit L_unit)) in
   let body = mk_lit_exp L_undef in
-  [mk_val_spec (VS_val_spec (typschm, fun_id, None, false));
+  [mk_val_spec (VS_val_spec (typschm, fun_id, None));
    mk_fundef [mk_funcl fun_id pat body]]
 
 let rec sail_of_declaration ctx (decl : ASL_AST.declaration) =
@@ -3114,7 +3114,7 @@ let sail_of_maps ctx (decls: ASL_AST.declaration list) =
             (mk_pat (P_tuple pats), pguard)
        in
        let declare_arg (ty, id) ctx = declare_immutable id (sail_of_ty ctx ty) ctx in
-       let (mapped_args, unmapped_args) = List.partition has_field_mapping args in
+       let (_, unmapped_args) = List.partition has_field_mapping args in
        let is_proc = (ret_ty = ASL_TC.type_unit) in
        let ctx' =
          { ctx with fun_args = args; fun_ret_typ = (if is_proc then None else Some ret_ty) }
