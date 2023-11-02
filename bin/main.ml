@@ -1,10 +1,10 @@
 open LibASL.Asl_ast
 open Libsail.Ast_util
 open Libsail.Ast_defs
+open Libsail.Type_error
 
 module Sail_PP = Libsail.Pretty_print_sail
 module Type_check = Libsail.Type_check
-module Type_error = Libsail.Type_error
 module Initial_check = Libsail.Initial_check
 module Preprocess = Libsail.Preprocess
 module Constraint = Libsail.Constraint
@@ -526,19 +526,20 @@ let orig_file is_forward chunk =
   let ext = if is_forward then ".val.osail" else ".osail" in
   !patch_dir ^ "/" ^ name_of_chunk chunk ^ ext
 
-let rec get_unresolved_quants (err: Type_check.type_error) =
+let rec get_unresolved_quants (err: type_error) =
   let open Type_check in
   match err with
-  | Err_unresolved_quants (_, quants, locals, ncs) -> [(quants, locals, ncs)]
-  | Err_failed_constraint (check, locals, ncs)
-  | Err_inner (Err_failed_constraint (check, locals, ncs), _, _, _, _) ->
-     [([mk_qi_nc check], locals, ncs)]
+  | Err_unresolved_quants (_, quants, locals, tyvars, ncs) -> [(quants, locals, tyvars, ncs)]
+  | Err_failed_constraint (check, locals, tyvars, ncs)
+  | Err_inner (Err_failed_constraint (check, locals, tyvars, ncs), _, _, _, _) ->
+     [([mk_qi_nc check], locals, tyvars, ncs)]
   | Err_no_casts (_, typ1, typ2, err', errs') ->
      begin match typ1, typ2 with
        | Typ_aux (Typ_app (id1, [A_aux (A_nexp n1, _); _]), _),
          Typ_aux (Typ_app (id2, [A_aux (A_nexp n2, _); _]), _)
          when string_of_id id1 = "bitvector" && string_of_id id2 = "bitvector" ->
-           [([mk_qi_nc (nc_eq n1 n2)], Bindings.empty, [])]
+           let tyvars : Libsail.Type_env.type_variables = { vars = KBindings.empty; shadows = KBindings.empty } in
+           [([mk_qi_nc (nc_eq n1 n2)], Bindings.empty, tyvars, [])]
        | _ ->
           get_unresolved_quants err' @ List.concat (List.map get_unresolved_quants errs')
      end
@@ -546,19 +547,19 @@ let rec get_unresolved_quants (err: Type_check.type_error) =
      List.concat (List.map (fun (_, err) -> get_unresolved_quants err) errs')
   | Err_inner (err1, _, _, _, err2) ->
      get_unresolved_quants err1 @ get_unresolved_quants err2
-  | Err_subtype (typ1, typ2, _, ncs, _) ->
+  | Err_subtype (typ1, typ2, _, ncs, tyvars) ->
      begin match destruct_numeric typ1, destruct_numeric typ2 with
        | Some ([], nc1, nexp1), Some ([], nc2, nexp2) ->
           let nc = nc_and (nc_eq nexp1 nexp2) (nc_and nc1 nc2) in
-          [([mk_qi_nc nc], Bindings.empty, List.map snd ncs)]
+          [([mk_qi_nc nc], Bindings.empty, tyvars, List.map snd ncs)]
        | _ -> []
      end
   | Err_no_num_ident _
   | Err_other _ -> []
 
-let is_duplicate_def (err: Type_check.type_error) (Ast.DEF_aux (def, _)) =
+let is_duplicate_def (err: type_error) (Ast.DEF_aux (def, _)) =
   let open Ast in
-  let err_str = Type_error.string_of_type_error err in
+  let err_str = string_of_type_error err in
   let is_err str = Str.string_match (Str.regexp_string str) err_str 0 in
   match def with
   | DEF_register (DEC_aux (DEC_reg (_, id, _), _)) ->
@@ -599,12 +600,12 @@ let report_sail_error (ctx: Translate_asl.ctx) decls sail convert continue =
      print_endline (bold "\nFailed to typecheck the following sail:");
      Sail_PP.pp_ast stdout sail;
      print_endline (bold "\nDerivation:");
-     Type_check.opt_tc_debug := 1;
+     Type_check.set_tc_debug 1;
      let _, _ =
-       try Type_error.check ctx.tc_env sail with
+       try check ctx.tc_env sail with
        | Reporting.Fatal_error _ -> empty_ast, ctx.tc_env
      in
-     Type_check.opt_tc_debug := 0;
+     Type_check.set_tc_debug 0;
      print_endline (bold "\nReason:");
      print_endline (Reporting.loc_to_string l);
      print_endline e;
@@ -619,12 +620,26 @@ let quant_error_eq (quants1, _, _) (quants2, _, _) =
   String.concat ", " (List.map string_of_quant_item quants1)
   = String.concat ", " (List.map string_of_quant_item quants2)
 
-let merge_quant_errs env ((quants1, _locals1, _ncs1) as err1) ((quants2, _locals2, _ncs2) as err2) =
-  (* TODO: Handle locals/ncs? *)
+let constraints_with_kopts kopts ncs =
+  List.filter (fun nc -> not (KOptSet.disjoint (kopts_of_constraint nc) kopts)) ncs
+
+let merge_quant_errs global_env ((quants1, locals1, tyvars1, ncs1) as err1) ((quants2, locals2, tyvars2, ncs2) as err2) =
   let open Type_check in
+  let open Sail_to_sail in
+  (* Bail out if the environments are different *)
+  let quant_kopts1 = kopts_of_quant_items quants1 in
+  let quant_tyvars1 = filter_type_variables quant_kopts1 tyvars1 in
+  let quant_ncs1 = constraints_with_kopts quant_kopts1 ncs1 in
+  let quant_kopts2 = kopts_of_quant_items quants2 in
+  let quant_tyvars2 = filter_type_variables quant_kopts2 tyvars2 in
+  let quant_ncs2 = constraints_with_kopts quant_kopts2 ncs2 in
+  if Bindings.compare compare_local locals1 locals2 <> 0 then None else
+  if compare_type_variables quant_tyvars1 quant_tyvars2 <> 0 then None else
+  if List.compare NC.compare quant_ncs1 quant_ncs2 <> 0 then None else
   (* If the errors are equal, return one of them *)
-  if quant_error_eq err1 err2 then Some err1 else
+  if List.compare QuantItem.compare quants1 quants2 = 0 then Some err1 else
   (* Otherwise, check if the unresolved constraints of one imply those of the other *)
+  let env = mk_local_env tyvars1 ncs1 global_env in
   let qi_constraints = function
     | Ast.QI_aux (Ast.QI_constraint nc, _) -> [nc]
     | _ -> []
@@ -691,19 +706,20 @@ and iterate_check ?(modify_val_specs=true) n env sail =
     let checked_sail, env = check env sail in
     checked_sail, sail, env
   with
-  | Type_error (env', l, err) when n <= 50 ->
-     begin match merge_unresolved_quants env' err with
-     | Some (quants, locals, ncs) ->
+  | Type_error (l, err) when n <= 50 ->
+     begin match merge_unresolved_quants env err with
+     | Some (quants, locals, tyvars, ncs) ->
+        let local_env = Sail_to_sail.mk_local_env tyvars ncs env in
         let fix_quant sail quant =
-          match Type_error.analyze_unresolved_quant locals ncs quant with
-          | Type_error.Suggest_add_constraint nc
-            when not (prove __POS__ env' (nc_not nc)) ->
+          match analyze_unresolved_quant locals ncs quant with
+          | Suggest_add_constraint nc
+            when not (prove __POS__ local_env (nc_not nc)) ->
              begin
                try
-                 Sail_to_sail.rewrite_add_constraint ~modify_val_spec:modify_val_specs l env env' nc ncs sail
+                 Sail_to_sail.rewrite_add_constraint ~modify_val_spec:modify_val_specs l env nc tyvars ncs sail
                with
-               | Type_error (_, _, err) ->
-                  prerr_endline Util.(Type_error.string_of_type_error err |> red |> clear);
+               | Type_error (_, err) ->
+                  prerr_endline Util.(string_of_type_error err |> red |> clear);
                   sail
                | Failure msg ->
                   prerr_endline Util.(msg |> red |> clear);
@@ -721,9 +737,9 @@ and iterate_check ?(modify_val_specs=true) n env sail =
           let sail' = { sail with defs = remove_duplicate_def err sail.defs } in
           iterate_check ~modify_val_specs (n + 1) env sail'
         end else
-          raise (Asl_type_error (sail, l, Type_error.string_of_type_error err))
+          raise (Asl_type_error (sail, l, string_of_type_error err))
      end
-  | Type_error (_, l, err) -> raise (Asl_type_error (sail, l, Type_error.string_of_type_error err))
+  | Type_error (l, err) -> raise (Asl_type_error (sail, l, string_of_type_error err))
 
 and convert_ast ?use_patches:(use_patches=true) ctx = function
   | [] -> empty_ast, empty_ast, ctx
@@ -1078,8 +1094,8 @@ let () =
     ()
   else
     try main () with
-    | Type_check.Type_error (_, _, err) ->
+    | Type_error (_, err) ->
        prerr_endline "Unhandled type error!";
-       prerr_endline (Type_error.string_of_type_error err);
+       prerr_endline (string_of_type_error err);
        Printexc.print_backtrace stderr;
        exit 1

@@ -805,9 +805,47 @@ let insert_into_block n insertion defs =
   let map_exps = map_exp { id_alg with f_exp = rewrite_exp } in
   map_fundefs (map_funcl_exps map_exps) defs
 
+module QuantItem = struct
+  type t = quant_item
+  let compare qi1 qi2 =
+    match (qi1, qi2) with
+    | QI_aux (QI_id kopt1, _), QI_aux (QI_id kopt2, _) -> KOpt.compare kopt1 kopt2
+    | QI_aux (QI_id _, _), _ -> -1
+    | QI_aux (QI_constraint nc1, _), QI_aux (QI_constraint nc2, _) -> NC.compare nc1 nc2
+    | QI_aux (QI_constraint _, _), _ -> 1
+end
+
+type type_variables = Libsail.Type_env.type_variables
+
+let compare_local (mut1, typ1) (mut2, typ2) =
+  match (mut1, mut2) with
+  | Immutable, Immutable
+  | Mutable, Mutable -> Typ.compare typ1 typ2
+  | Immutable, Mutable -> -1
+  | Mutable, Immutable -> 1
+
+let compare_type_variables (tyvars1 : type_variables) (tyvars2 : type_variables) =
+  let compare_kind_aux (l1, k1) (l2, k2) = Kind.compare (K_aux (k1, l1)) (K_aux (k2, l2)) in
+  let v = KBindings.compare compare_kind_aux tyvars1.vars tyvars2.vars in
+  if v = 0 then KBindings.compare compare tyvars1.shadows tyvars2.shadows else v
+
+let kids_of_kopts kopts = KidSet.of_list (List.map kopt_kid (KOptSet.to_list kopts))
+
+let filter_type_variables kopts (tyvars : type_variables) : type_variables =
+  let keep kid _ = KidSet.mem kid (kids_of_kopts kopts) in
+  { vars = KBindings.filter keep tyvars.vars; shadows = KBindings.filter keep tyvars.shadows }
+
+let kopts_of_quant_items qis = List.map kopts_of_quant_item qis |> List.fold_left KOptSet.union KOptSet.empty
+
+let mk_local_env (tyvars : Libsail.Type_env.type_variables) ncs global_env =
+  let add kid (l, kind) env = Type_check.Env.add_typ_var l (mk_kopt kind kid) env in
+  KBindings.fold add tyvars.vars global_env
+  |> List.fold_right Env.add_constraint ncs
+
 exception Not_top_level of n_constraint;;
 
-let rewrite_add_constraint ?(modify_val_spec=true) l env env_l nc local_ncs ast =
+let rewrite_add_constraint ?(modify_val_spec=true) l global_env nc tyvars local_ncs ast =
+  let local_env = mk_local_env tyvars local_ncs global_env in
   (* prerr_endline "Calling rewrite_add_constraint"; *)
   match l with
   | Parse_ast.Unique (n, _) ->
@@ -829,14 +867,17 @@ let rewrite_add_constraint ?(modify_val_spec=true) l env env_l nc local_ncs ast 
           (* We want to remove any conjunct in the constraint we are
              adding that is derivable from existing constraints, so as
              to not duplicate constraints in the type signature. *)
-          let env = Env.add_typquant tq_l typq env in
-          let conjs = List.filter (fun conj -> not (prove __POS__ env_l conj ||
-                                                      (KidSet.for_all (fun tyvar -> Env.shadows tyvar env_l == 0) (tyvars_of_constraint conj) &&
-                                                 prove __POS__ env conj))) conjs in
+          let fun_env = Env.add_typquant tq_l typq global_env in
+          let is_shadowed kid = match KBindings.find_opt kid tyvars.shadows with Some n -> n <> 0 | None -> false in
+          let is_fun_constraint conj =
+            KidSet.for_all (fun tyvar -> not (is_shadowed tyvar)) (tyvars_of_constraint conj)
+            && prove __POS__ fun_env conj
+          in
+          let conjs = List.filter (fun conj -> not (prove __POS__ local_env conj) && not (is_fun_constraint conj)) conjs in
           (* Any constraint in local_ncs that cannot be derived by the
              function quantifer must have been introduced via flow
              typing. *)
-          let flows = List.map nc_not (List.filter (fun nc -> not (prove __POS__ env nc)) local_ncs) in
+          let flows = List.map nc_not (List.filter (fun nc -> not (prove __POS__ fun_env nc)) local_ncs) in
           let flows =
             List.filter (fun nc -> KidSet.subset (tyvars_of_constraint nc) (KidSet.of_list (List.map kopt_kid kopts))) flows
           in
@@ -849,11 +890,11 @@ let rewrite_add_constraint ?(modify_val_spec=true) l env env_l nc local_ncs ast 
              (* We can only add a constraint to the valspec if it
                 contains only variables defined by that valspec. *)
              if KOptSet.subset (kopts_of_constraint nc) (KOptSet.of_list kopts)
-                && KidSet.for_all (fun tyvar -> Env.shadows tyvar env_l == 0) nc_tyvars
+                && KidSet.for_all (fun tyvar -> not (is_shadowed tyvar)) nc_tyvars
                 && List.length (quant_items typq) > 0 then
                (* Now that we are adding a constraint to the val-spec,
                   double-check whether it makes some of the existing constraints redundant *)
-               let env_nc = Env.add_constraint nc (List.fold_right (Env.add_typ_var l) kopts env) in
+               let env_nc = Env.add_constraint nc (List.fold_right (Env.add_typ_var l) kopts fun_env) in
                let nc_needed nc = try not (prove __POS__ env_nc nc) with _ -> true in
                let ncs = List.filter nc_needed (List.concat (List.map constraint_conj ncs)) in
                let qis = List.map mk_qi_kopt kopts @ List.map mk_qi_nc (ncs @ [nc]) in
@@ -871,7 +912,7 @@ let rewrite_add_constraint ?(modify_val_spec=true) l env env_l nc local_ncs ast 
             (* Check whether the location with the missing constraint is nested
                under a potentially incomplete flow mapping, in which case we
                should not attach the constraint to the val-spec. *)
-            let incomplete_flows = List.exists (loc_in_def_with_incomplete_flow_typing env_l n) ast.defs in
+            let incomplete_flows = List.exists (loc_in_def_with_incomplete_flow_typing local_env n) ast.defs in
 
             if List.exists is_spec_of_id ast.defs && modify_val_spec && not incomplete_flows then
               map_valspecs (map_valspec_typschm add_constraint) ast

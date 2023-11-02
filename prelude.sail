@@ -38,9 +38,6 @@ overload operator != = {neq_any}
 val in_range : forall 'n 'i 'j. (int('n), int('i), int('j)) -> bool(('i < 'j & 'i <= 'n <= 'j) | ('i >= 'j & 'j <= 'n <= 'i))
 function in_range(n, i, j) = if i < j then (i <= n & n <= j) else (j <= n & n <= i)
 
-val min_int : forall 'n 'm. (int('n), int('m)) -> {'o, ('n <= 'm & 'o == 'n) | ('n > 'm & 'o == 'm). int('o)}
-function min_int(n, m) = (if n <= m then n else m)
-
 val min_real : (real, real) -> real
 function min_real(n, m) = (if n <= m then n else m)
 
