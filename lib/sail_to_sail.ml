@@ -829,7 +829,7 @@ let compare_type_variables (tyvars1 : type_variables) (tyvars2 : type_variables)
   let v = KBindings.compare compare_kind_aux tyvars1.vars tyvars2.vars in
   if v = 0 then KBindings.compare compare tyvars1.shadows tyvars2.shadows else v
 
-let kids_of_kopts kopts = KidSet.of_list (List.map kopt_kid (KOptSet.to_list kopts))
+let kids_of_kopts kopts = KidSet.of_list (List.map kopt_kid (KOptSet.elements kopts))
 
 let filter_type_variables kopts (tyvars : type_variables) : type_variables =
   let keep kid _ = KidSet.mem kid (kids_of_kopts kopts) in
