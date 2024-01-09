@@ -43,9 +43,6 @@ function min_real(n, m) = (if n <= m then n else m)
 
 overload Min = {min_int, min_real}
 
-val max_int : forall 'n 'm. (int('n), int('m)) -> {'o, ('n <= 'm & 'o == 'm) | ('n > 'm & 'o == 'n). int('o)}
-function max_int(n, m) = (if n <= m then m else n)
-
 val max_real : (real, real) -> real
 function max_real(n, m) = (if n <= m then m else n)
 
@@ -73,8 +70,6 @@ overload DIV = {ediv_nat, fdiv_int}
 overload MOD = {emod_nat, fmod_int}
 overload QUOT = {tdiv_int}
 overload REM = {tmod_int}
-
-val pow2 = pure "pow2" : forall 'n, 'n >= 0. int('n) -> int(2 ^ 'n)
 
 overload operator ^ = {pow_real}
 
@@ -225,7 +220,7 @@ union exception = {
   Error_ExceptionTaken : unit,
   Error_Unpredictable : unit,
   Error_ConstrainedUnpredictable : unit,
-  Error_SError : unit
+  Error_SError : bool
 }
 
 val IsUNDEFINED : exception -> bool
@@ -238,10 +233,10 @@ function IsUNDEFINED ex = match ex { Error_Undefined() => true, _ => false }
 function IsUNPREDICTABLE ex = match ex { Error_Unpredictable() => true, _ => false }
 function IsSEE ex = match ex { Error_See(_) => true, _ => false }
 function IsExceptionTaken ex = match ex { Error_ExceptionTaken() => true, _ => false }
-function IsSError ex = match ex { Error_SError() => true, _ => false }
+function IsSError ex = match ex { Error_SError(_) => true, _ => false }
 
-val ThrowSError : unit -> unit
-function ThrowSError() = throw(Error_SError())
+val ThrowSError : bool -> unit
+function ThrowSError(iesb_req) = throw(Error_SError(iesb_req))
 
 val ReservedEncoding : unit -> unit
 function ReservedEncoding() = throw(Error_ReservedEncoding())
@@ -253,25 +248,20 @@ val HexStr = pure "hex_str" : int -> string
 val BoolStr : bool -> string
 function BoolStr b = match b { true => "true", false => "false" }
 
-val append_str = pure {ocaml: "concat_str", interpreter: "concat_str", lem: "stringAppend", c: "concat_str", coq: "String.append" } :
-  (string, string) -> string
-
 function append_int(str: string, n: int) -> string = {
-  append_str(str, DecStr(n))
+  concat_str(str, DecStr(n))
 }
 
 function append_bool(str: string, b: bool) -> string = {
-  append_str(str, if b then "true" else "false")
+  concat_str(str, if b then "true" else "false")
 }
 
 infixl 4 ++
 
-overload operator ++ = {append_int, append_bool, append_str}
+overload operator ++ = {append_int, append_bool, concat_str}
 
 val print_integer : int -> unit
 function print_integer(i) = print_int("", i)
-
-overload print = {print_endline, print_int, print_integer}
 
 val print_newline : unit -> unit
 function print_newline () = print_endline("")

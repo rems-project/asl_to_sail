@@ -555,6 +555,7 @@ let rec get_unresolved_quants (err: type_error) =
        | _ -> []
      end
   | Err_no_num_ident _
+  | Err_not_in_scope _
   | Err_other _ -> []
 
 let is_duplicate_def (err: type_error) (Ast.DEF_aux (def, _)) =
@@ -677,6 +678,20 @@ let sail_filename base = match !output_dir with
      let base = Filename.basename base in
      Filename.concat dir (base ^ ".sail")
 
+(* Library files contain a few $option directives that it's safe for us to
+   ignore at this stage. *)
+let ignored_options = [
+  ("-lem_extern_type", Arg.String (fun _ -> ()), "");
+  ("-coq_extern_type", Arg.String (fun _ -> ()), "");
+]
+
+let parse_sail_file filename =
+  let parsed_ast = Libsail.Initial_check.parse_file filename |> snd in
+  let parsed_ast = Libsail.Preprocess.preprocess !sail_lib_dir None ignored_options parsed_ast in
+  let ast = Libsail.Initial_check.process_ast ~generate:false (Libsail.Parse_ast.Defs [(filename, parsed_ast)]) in
+  let vs_ids = val_spec_ids ast.defs in
+  { ast with defs = ast.defs |> Initial_check.generate_undefineds vs_ids |> Initial_check.generate_enum_functions vs_ids }
+
 let rec interact ?use_patches:(use_patches=true) ctx sail chunk rest =
   print_endline (green "\nWhat do you want to do?");
   print_endline ("(p) patch, (x) exit, (s) skip:");
@@ -766,9 +781,7 @@ and convert_ast ?use_patches:(use_patches=true) ctx = function
 
            try
              let file = patch_file is_forward chunk in
-             let _, parsed_ast = Initial_check.parse_file file in
-             let sail = Initial_check.process_ast (Parse_ast.Defs [(file, Preprocess.preprocess !sail_lib_dir None [] parsed_ast)]) in
-             sail
+             parse_sail_file file
            with
            | Reporting.Fatal_error e ->
               print_endline (bold "\nFailed to parse patch file: " ^ patch_file is_forward chunk);
@@ -780,8 +793,7 @@ and convert_ast ?use_patches:(use_patches=true) ctx = function
            try
              let (val_decls, decls) = List.partition is_val_decl decls in
              let file = patch_file true chunk in
-             let _, parsed_ast = Initial_check.parse_file file in
-             let vals = Initial_check.process_ast (Parse_ast.Defs [(file, Preprocess.preprocess !sail_lib_dir None [] parsed_ast)]) in
+             let vals = parse_sail_file file in
              let check_vals () = Type_check.check ctx.tc_env vals in
              let (_, env) = report_sail_error ctx val_decls vals check_vals (fun _ -> exit 1) in
              let ctx = { ctx with tc_env = env } in
@@ -960,18 +972,11 @@ let process_event_clauses (ctx : Translate_asl.ctx) decls =
        ASL_File ("event_clauses.asl", decls, checked_ast, ast))
     (fun _ -> exit 1)
 
-(* Library files contain a few $option directives that it's safe for us to
-   ignore at this stage. *)
-let ignored_options = [
-  ("-lem_extern_type", Arg.String (fun _ -> ()), "");
-  ("-coq_extern_type", Arg.String (fun _ -> ()), "");
-]
-
 let process_sail_file ((ctx : Translate_asl.ctx), maps, events, clauses, previous_chunks, previous_files) filename =
   if not !quiet then print_endline ("Reading Sail file " ^ filename);
   let (ast, env, _) =
-    try Libsail.Frontend.load_files !sail_lib_dir ignored_options ctx.tc_env [filename] with
-    | Reporting.Fatal_error e -> Reporting.print_error e; exit 1
+    try parse_sail_file filename |> Libsail.Frontend.check_ast false ctx.tc_env
+    with Reporting.Fatal_error e -> Reporting.print_error e; exit 1
   in
   let previous_files' = previous_files @ [Sail_File (filename, ast)] in
   ({ ctx with tc_env = env }, maps, events, clauses, previous_chunks, previous_files')
