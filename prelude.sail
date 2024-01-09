@@ -241,6 +241,12 @@ function ThrowSError(iesb_req) = throw(Error_SError(iesb_req))
 val ReservedEncoding : unit -> unit
 function ReservedEncoding() = throw(Error_ReservedEncoding())
 
+val PatternMatchFailure : forall ('a : Type). string -> 'a
+function PatternMatchFailure(location) = {
+  assert(false, concat_str("Pattern match failure in ", location));
+  exit()
+}
+
 val DecStr = pure "dec_str" : int -> string
 
 val HexStr = pure "hex_str" : int -> string

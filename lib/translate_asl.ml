@@ -73,6 +73,7 @@ type ctx = {
   bitfields : ASL_AST.slice list Ast_util.Bindings.t Ast_util.Bindings.t;
   fun_constraints : Ast.n_constraint Bindings.t;
   bound_exprs : ident ExprMap.t;
+  fun_id : ident option;
   fun_args : (ASL_AST.ty * ASL_AST.ident) list;
   fun_ret_typ : ASL_AST.ty option;
   locals : lvar Bindings.t;
@@ -90,6 +91,7 @@ let empty_ctx = {
   bitfields = Ast_util.Bindings.empty;
   fun_constraints = Bindings.empty;
   bound_exprs = ExprMap.empty;
+  fun_id = None;
   fun_args = [];
   fun_ret_typ = None;
   locals = Bindings.empty;
@@ -1367,7 +1369,7 @@ and add_final_return_catcher (Catcher_Guarded (e, stmts)) =
 
 and add_final_return_optstmts = function
   | Some stmts -> Some (add_final_return_stmt stmts)
-  | None -> Some (add_final_return_stmt [])
+  | None -> None
 
 let args_of_exps args =
   if args = [] then [mk_lit_exp L_unit] else args
@@ -2063,7 +2065,7 @@ and sail_of_stmt ctx (stmt : ASL_AST.stmt) =
           recur (ASL_AST.Stmt_If (c', t', eifs, e, l))
      in
      mk_exp (E_if (sail_of_expr ctx c, t_exp, e_exp))
-  | ASL_AST.Stmt_Case (e, alts, otherwise, _) ->
+  | ASL_AST.Stmt_Case (e, alts, otherwise, l) ->
      let e' = sail_of_expr ctx e in
      let alts' = List.concat (List.map (sail_of_alt ctx) alts) in
      let otherwise' =
@@ -2072,6 +2074,9 @@ and sail_of_stmt ctx (stmt : ASL_AST.stmt) =
           [mk_pexp (Pat_exp (mk_pat P_wild, sail_of_stmts ctx stmts))]
        | None ->
           let is_complete =
+            (* HACK: A case split on VL was probably introduced by the mono_vl rewrite, and should be complete,
+               but we should thread through the necessary information and check it *)
+            if Option.is_some (is_vl_read e) || string_of_exp e' = "VL" || string_of_exp e' = "SVL" then true else
             try
               let strip_body pexp =
                 (* Remove bodies of cases so that type checking errors there
@@ -2081,11 +2086,36 @@ and sail_of_stmt ctx (stmt : ASL_AST.stmt) =
               in
               let dummy_exp = mk_exp (E_match (e', List.map strip_body alts')) in
               let (E_aux (_, (_, a))) = Type_check.check_exp ctx.tc_env dummy_exp unit_typ in
-              Option.is_some (Ast_util.get_attribute "complete" (Type_check.untyped_annot a))
-            with _ -> false
+              if Option.is_some (Ast_util.get_attribute "complete" (Type_check.untyped_annot a)) then true
+              else begin
+                prerr_endline "Warning: incomplete pattern";
+                (* Print some debugging information *)
+                let inferred_e' = Type_check.infer_exp ctx.tc_env e' in
+                let _ = prerr_endline (string_of_typ (Type_check.typ_of inferred_e')) in
+                let _ = match unaux_typ (Type_check.typ_of inferred_e') with
+                  | Typ_id id when Ast_util.Bindings.mem id (Type_check.Env.get_enums ctx.tc_env) ->
+                      IdSet.iter (fun id -> prerr_endline (string_of_id id)) (Ast_util.Bindings.find id (Type_check.Env.get_enums ctx.tc_env))
+                  | _ -> ()
+                in
+                let _ = prerr_endline (string_of_exp dummy_exp) in
+                let _ = List.iter (fun (_, attr, _) -> prerr_endline attr) (Ast_util.get_attributes (Type_check.untyped_annot a)) in
+                (* let _ = input_line stdin in *)
+                false
+              end
+            with
+            | Libsail.Type_error.Type_error (_, err) ->
+                prerr_endline (Libsail.Type_error.string_of_type_error err);
+                (* exit 1 *)
+                false
           in
-          if is_complete then [] else [mk_pexp (Pat_exp (mk_pat P_wild, sail_of_stmts ctx []))]
-     in
+          let fun_name =
+            match ctx.fun_id with
+            | Some id -> string_of_id (sail_id_of_ident id)
+            | _ -> ""
+          in
+          let fail_exp = mk_exp (E_app (mk_id "PatternMatchFailure", [mk_lit_exp (L_string fun_name)])) in
+          if is_complete then [] else [mk_pexp (Pat_exp (mk_pat P_wild, fail_exp))]
+        in
      mk_exp (E_match (e', alts' @ otherwise'))
   | ASL_AST.Stmt_For (var, start, dir, stop, stmts, _) ->
      let var' = sail_id_of_ident var in
@@ -2580,7 +2610,7 @@ let sail_fundef_of_decl ?ncs:(ncs=[]) ctx id ret_ty args stmts =
   let declare_arg (ty, id) ctx = declare_immutable id (sail_of_ty ctx ty) ctx in
   let is_proc = (ret_ty = ASL_TC.type_unit) in
   let ctx' =
-    { ctx with fun_args = args; fun_ret_typ = (if is_proc then None else Some ret_ty) }
+    { ctx with fun_id = Some id; fun_args = args; fun_ret_typ = (if is_proc then None else Some ret_ty) }
     |> List.fold_right declare_arg args
   in
   (* For functions, add final return statements to all branches.
@@ -3117,7 +3147,7 @@ let sail_of_maps ctx (decls: ASL_AST.declaration list) =
        let (_, unmapped_args) = List.partition has_field_mapping args in
        let is_proc = (ret_ty = ASL_TC.type_unit) in
        let ctx' =
-         { ctx with fun_args = args; fun_ret_typ = (if is_proc then None else Some ret_ty) }
+         { ctx with fun_id = Some name; fun_args = args; fun_ret_typ = (if is_proc then None else Some ret_ty) }
          |> List.fold_right declare_arg unmapped_args
        in
        let body' = sail_of_stmts ctx' body in
