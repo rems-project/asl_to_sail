@@ -84,12 +84,12 @@ let rewrite_overloaded_top sail =
       let get_set_overload =
         if Str.string_match (Str.regexp "^a[sg]et_") (string_of_id id) 0 then
           let id = mk_id (Str.replace_first (Str.regexp "^a[sg]et_") "" (string_of_id id)) in
-          [mk_def (DEF_overload (id, List.map (fun def -> valspec_id (valspec_of_def def)) valspecs))]
+          [mk_def (DEF_overload (id, List.map (fun def -> valspec_id (valspec_of_def def)) valspecs)) ()]
         else
           []
       in
       valspecs
-      @ [mk_def (DEF_overload (id, List.map (fun def -> valspec_id (valspec_of_def def)) valspecs))]
+      @ [mk_def (DEF_overload (id, List.map (fun def -> valspec_id (valspec_of_def def)) valspecs)) ()]
       @ get_set_overload
       @ rename_fundefs 0 funs
     end
@@ -382,7 +382,7 @@ let exp_ids exp =
    introduce an additional mutable variable which is initialised with
    the value of the function argument (which gets __arg) appended *)
 
-let rewrite_mutated_parameters =
+let rewrite_mutated_parameters (ast : untyped_ast) =
   let id_lexp id =
     match string_of_id id with
     | "wback" | "hwupdatewalk" -> mk_lexp (LE_typ (bool_typ, id))
@@ -415,7 +415,7 @@ let rewrite_mutated_parameters =
         (id, map_pat rewrite_arg_names pat, Option.map rewrite_exp guard, rewrite_exp exp)
       end
   in
-  map_fundefs rewrite_funcl
+  map_fundefs rewrite_funcl ast
 
 (* This rewrite turns datasize arguments from int arguments into exact
    values of the form [:'datasize:], as well as other similar
@@ -522,7 +522,7 @@ let rewrite_int_select id defs =
             [mk_exp (E_let (lb, mk_exp (E_block exps)))]
             *)
          | Some ints ->
-            let existential = exist_typ (exp_loc assignment) (fun kid -> nc_set kid ints) (fun kid -> atom_typ (nvar kid)) in
+            let existential = exist_typ (exp_loc assignment) (fun kid -> nc_set (nvar kid) ints) (fun kid -> atom_typ (nvar kid)) in
             let lb = mk_letbind (mk_pat (P_typ (existential, mk_pat (P_var (mk_pat (P_id id), mk_typ_pat (TP_var (kid_of_id id))))))) exp in
             [mk_exp (E_let (lb, mk_exp (E_block exps)))]
          | None -> assignment :: exps

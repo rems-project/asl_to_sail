@@ -284,7 +284,7 @@ let impdef_decl id =
   let impl = Decl_FunDefn (ty, fun_id, [arg], [body], Unknown) in
   [decl; impl]
 
-type sail_ast = uannot ast
+type sail_ast = untyped_ast
 
 let header = ref (None : string option)
 
@@ -319,7 +319,7 @@ let write_sail (sail_ast : sail_ast) (filename : string) : unit =
   let (temp_filename, o) = Filename.open_temp_file (Filename.basename filename) "_temp.sail" in
   begin
     output_string o (get_header ());
-    Sail_PP.pp_ast o sail_ast;
+    Sail_PP.output_ast o sail_ast;
     close_out o;
     Util.move_file temp_filename filename;
   end
@@ -342,7 +342,7 @@ let get_editor =
   try Sys.getenv "EDITOR" with
   | Not_found -> print_endline "EDITOR and VISUAL environment vars unset"; "vim"
 
-exception Asl_type_error of uannot ast * Parse_ast.l * string;;
+exception Asl_type_error of untyped_ast * Parse_ast.l * string;;
 
 module StringSet = Set.Make(String)
 module StringMap = Map.Make(String)
@@ -531,21 +531,11 @@ let rec get_unresolved_quants (err: type_error) =
   match err with
   | Err_unresolved_quants (_, quants, locals, tyvars, ncs) -> [(quants, locals, tyvars, ncs)]
   | Err_failed_constraint (check, locals, tyvars, ncs)
-  | Err_inner (Err_failed_constraint (check, locals, tyvars, ncs), _, _, _, _) ->
+  | Err_inner (Err_failed_constraint (check, locals, tyvars, ncs), _, _, _) ->
      [([mk_qi_nc check], locals, tyvars, ncs)]
-  | Err_no_casts (_, typ1, typ2, err', errs') ->
-     begin match typ1, typ2 with
-       | Typ_aux (Typ_app (id1, [A_aux (A_nexp n1, _); _]), _),
-         Typ_aux (Typ_app (id2, [A_aux (A_nexp n2, _); _]), _)
-         when string_of_id id1 = "bitvector" && string_of_id id2 = "bitvector" ->
-           let tyvars : Libsail.Type_env.type_variables = { vars = KBindings.empty; shadows = KBindings.empty } in
-           [([mk_qi_nc (nc_eq n1 n2)], Bindings.empty, tyvars, [])]
-       | _ ->
-          get_unresolved_quants err' @ List.concat (List.map get_unresolved_quants errs')
-     end
   | Err_no_overloading (_, errs') ->
-     List.concat (List.map (fun (_, err) -> get_unresolved_quants err) errs')
-  | Err_inner (err1, _, _, _, err2) ->
+     List.concat (List.map (fun (_, _, err) -> get_unresolved_quants err) errs')
+  | Err_inner (err1, _, _, err2) ->
      get_unresolved_quants err1 @ get_unresolved_quants err2
   | Err_subtype (typ1, typ2, _, ncs, tyvars) ->
      begin match destruct_numeric typ1, destruct_numeric typ2 with
@@ -554,13 +544,19 @@ let rec get_unresolved_quants (err: type_error) =
           [([mk_qi_nc nc], Bindings.empty, tyvars, List.map snd ncs)]
        | _ -> []
      end
+  | Err_instantiation_info (_, err)
+  | Err_function_arg (_, _, err)
+  | Err_with_hint (_, err) -> get_unresolved_quants err
   | Err_no_num_ident _
   | Err_not_in_scope _
+  | Err_no_function_type _
+  | Err_unbound_id _
+  | Err_hint _
   | Err_other _ -> []
 
 let is_duplicate_def (err: type_error) (Ast.DEF_aux (def, _)) =
   let open Ast in
-  let err_str = string_of_type_error err in
+  let err_str, _ = string_of_type_error err in
   let is_err str = Str.string_match (Str.regexp_string str) err_str 0 in
   match def with
   | DEF_register (DEC_aux (DEC_reg (_, id, _), _)) ->
@@ -599,7 +595,7 @@ let report_sail_error (ctx: Translate_asl.ctx) decls sail convert continue =
      print_endline (bold "\nConverting ASL:");
      List.iter print_decl decls;
      print_endline (bold "\nFailed to typecheck the following sail:");
-     Sail_PP.pp_ast stdout sail;
+     Sail_PP.output_ast stdout sail;
      print_endline (bold "\nDerivation:");
      Type_check.set_tc_debug 1;
      let _, _ =
@@ -613,7 +609,7 @@ let report_sail_error (ctx: Translate_asl.ctx) decls sail convert continue =
      continue ()
   | Reporting.Fatal_error e ->
      print_endline (bold "Sail fatal error when processing:");
-     Sail_PP.pp_ast stdout sail;
+     Sail_PP.output_ast stdout sail;
      Reporting.print_error e;
      exit 1
 
@@ -734,7 +730,7 @@ and iterate_check ?(modify_val_specs=true) n env sail =
                  Sail_to_sail.rewrite_add_constraint ~modify_val_spec:modify_val_specs l env nc tyvars ncs sail
                with
                | Type_error (_, err) ->
-                  prerr_endline Util.(string_of_type_error err |> red |> clear);
+                  prerr_endline Util.(string_of_type_error err |> fst |> red |> clear);
                   sail
                | Failure msg ->
                   prerr_endline Util.(msg |> red |> clear);
@@ -752,9 +748,9 @@ and iterate_check ?(modify_val_specs=true) n env sail =
           let sail' = { sail with defs = remove_duplicate_def err sail.defs } in
           iterate_check ~modify_val_specs (n + 1) env sail'
         end else
-          raise (Asl_type_error (sail, l, string_of_type_error err))
+          raise (Asl_type_error (sail, l, string_of_type_error err |> fst))
      end
-  | Type_error (l, err) -> raise (Asl_type_error (sail, l, string_of_type_error err))
+  | Type_error (l, err) -> raise (Asl_type_error (sail, l, string_of_type_error err |> fst))
 
 and convert_ast ?use_patches:(use_patches=true) ctx = function
   | [] -> empty_ast, empty_ast, ctx
@@ -881,8 +877,8 @@ and convert_ast ?use_patches:(use_patches=true) ctx = function
      end
 
 type processed_file =
-  | ASL_File of string * LibASL.Asl_ast.declaration list * Type_check.tannot Ast_defs.ast * uannot Ast_defs.ast
-  | Sail_File of string * Type_check.tannot Ast_defs.ast
+  | ASL_File of string * LibASL.Asl_ast.declaration list * Type_check.typed_ast * untyped_ast
+  | Sail_File of string * Type_check.typed_ast
 
 let write_processed_file = function
   | ASL_File (filename, _, _, ast) ->
@@ -1064,7 +1060,6 @@ let main () : unit =
 
     Reporting.opt_warnings := false;
     Constraint.load_digests ();
-    Sail_PP.opt_use_heuristics := true;
     Libsail.Nl_flow.opt_nl_flow := true;
     Type_check.opt_expand_valspec := false; (* Preserve type abbreviations in val-specs for callgraph computation and slicing *)
 
@@ -1101,6 +1096,6 @@ let () =
     try main () with
     | Type_error (_, err) ->
        prerr_endline "Unhandled type error!";
-       prerr_endline (string_of_type_error err);
+       prerr_endline (string_of_type_error err |> fst);
        Printexc.print_backtrace stderr;
        exit 1

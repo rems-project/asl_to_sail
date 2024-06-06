@@ -1096,7 +1096,7 @@ let nc_of_int_constraint var constr =
   | IC_Set is ->
      begin match BigIntSet.elements is with
        | [i] -> Some (nc_eq (nvar kid) (nconstant i))
-       | is -> Some (nc_set kid is)
+       | is -> Some (nc_set (nvar kid) is)
      end
   | IC_Range (lo, hi) when Big_int.less_equal Big_int.zero lo ->
      let n = Big_int.succ (Big_int.sub hi lo) in
@@ -1104,7 +1104,7 @@ let nc_of_int_constraint var constr =
          (* Enumerate small intervals as sets, which are more easily
             picked up by the Sail monomorphisation analysis. *)
          let element i = Big_int.add lo (Big_int.of_int i) in
-         Some (nc_set kid (List.init (Big_int.to_int n) element))
+         Some (nc_set (nvar kid) (List.init (Big_int.to_int n) element))
        end else begin
          let lo' = nc_lteq (nconstant lo) (nvar kid) in
          let hi' = nc_lteq (nvar kid) (nconstant hi) in
@@ -1139,7 +1139,7 @@ let initial_exp_of_int_constraint = function
 
 let sail_intLits_type ints =
   let ints' = StringSet.of_list ints |> StringSet.elements |> List.map Big_int.of_string in
-  Type_check.exist_typ Unknown (fun kid -> nc_set kid ints') (fun kid -> atom_typ (nvar kid))
+  Type_check.exist_typ Unknown (fun kid -> nc_set (nvar kid) ints') (fun kid -> atom_typ (nvar kid))
 
 let rec expr_of_pattern (pat : pattern) =
   match pat with
@@ -2104,7 +2104,7 @@ and sail_of_stmt ctx (stmt : ASL_AST.stmt) =
               end
             with
             | Libsail.Type_error.Type_error (_, err) ->
-                prerr_endline (Libsail.Type_error.string_of_type_error err);
+                prerr_endline (fst (Libsail.Type_error.string_of_type_error err));
                 (* exit 1 *)
                 false
           in
@@ -2663,7 +2663,7 @@ let sail_bitfield_of_regtype ctx id len fields =
     try Some (sail_id_of_ident id, index_range_of_slices ctx slices) with _ -> None
   in
   let fields' = Util.option_these (List.map mk_field fields) in
-  mk_def (DEF_type (TD_aux (TD_bitfield (id, bits_typ (nconstant len'), fields'), no_annot)))
+  mk_def (DEF_type (TD_aux (TD_bitfield (id, bits_typ (nconstant len'), fields'), no_annot))) ()
 
 let rec bitfields_of_decls = function
   | Decl_Typedef (id, Type_Register (_, ((_ :: _) as fields)), _) :: decls ->
@@ -2782,9 +2782,9 @@ let sail_decoder_clause ctx = function
      let pexp = construct_pexp (clause_pat, clause_guard) body in
      let decode_suffix = decode_split arch opcode in
      let decoder_id = mk_id ("__Decode" ^ pprint_ident arch ^ decode_suffix) in
-     let a = (mk_def_annot Parse_ast.Unknown, empty_uannot) in
+     let a = (mk_def_annot Parse_ast.Unknown (), empty_uannot) in
      let sdfuncl = SD_funcl (FCL_aux (FCL_funcl (decoder_id, pexp), a)) in
-     [mk_def (DEF_scattered (SD_aux (sdfuncl, no_annot)))]
+     [mk_def (DEF_scattered (SD_aux (sdfuncl, no_annot))) ()]
 
 let sail_of_encoding ctx opost exec_id vl_exprs exec_args conditional encoding =
   match encoding with
@@ -2887,7 +2887,7 @@ let rec sail_of_declaration ctx (decl : ASL_AST.declaration) =
      let field' (ty, id) = (sail_of_ty ctx ty, sail_id_of_ident id) in
      let tvars = ASL_Utils.unionSets (List.map (fun (ty, _) -> ASL_Utils.fv_type ty) fields) in
      let tq = mk_typquant (List.map mk_qi_kopt (kopts_of_vars ctx tvars)) in
-     [mk_def (DEF_type (TD_aux (TD_record (id', tq, List.map field' fields, false), no_annot)))]
+     [mk_def (DEF_type (TD_aux (TD_record (id', tq, List.map field' fields, false), no_annot))) ()]
      @ (if IdentSet.is_empty tvars then unknown_fun id' (mk_id_typ id') else [])
   | Decl_Typedef (id, Type_Register (len, ((_ :: _) as fields)), _) ->
      [sail_bitfield_of_regtype ctx (sail_type_id_of_ident id) len fields]
@@ -2896,18 +2896,18 @@ let rec sail_of_declaration ctx (decl : ASL_AST.declaration) =
      let ty' = sail_of_ty ctx ty in
      let kopts = kopts_of_vars ctx (ASL_Utils.fv_type ty) in
      let tq = mk_typquant (List.map mk_qi_kopt kopts) in
-     [mk_def (DEF_type (TD_aux (TD_abbrev (id', tq, arg_typ ty'), no_annot)))]
+     [mk_def (DEF_type (TD_aux (TD_abbrev (id', tq, arg_typ ty'), no_annot))) ()]
      @ (if kopts = [] then unknown_fun id' ty' else [])
   | Decl_Enum (id, ids, _) ->
      let id' = sail_type_id_of_ident id in
      let ids' = List.map sail_id_of_ident ids in
-     [mk_def (DEF_type (TD_aux (TD_enum (id', ids', false), no_annot)))]
+     [mk_def (DEF_type (TD_aux (TD_enum (id', ids', false), no_annot))) ()]
      @ unknown_fun id' (mk_id_typ id')
   | Decl_Var (Type_Register (len, ((_ :: _) as fields)), id, _) ->
      let id' = sail_id_of_ident id in
      let typ_id = append_id id' "_Type" in
      sail_bitfield_of_regtype ctx typ_id len fields ::
-     [mk_def (DEF_register (DEC_aux (DEC_reg (mk_id_typ typ_id, id', None), no_annot)))]
+     [mk_def (DEF_register (DEC_aux (DEC_reg (mk_id_typ typ_id, id', None), no_annot))) ()]
   | Decl_Var (Type_Array (indices, (Type_Register (_, (_ :: _)) as regtype)), id, l) ->
      let regtype_id = add_name_suffix "ElemType" id in
      sail_of_declaration ctx (Decl_Typedef (regtype_id, regtype, l))
@@ -2915,12 +2915,12 @@ let rec sail_of_declaration ctx (decl : ASL_AST.declaration) =
   | Decl_Var (ty, id, _) ->
      let id' = sail_id_of_ident id in
      let ty' = sail_of_ty ctx ty in
-     [mk_def (DEF_register (DEC_aux (DEC_reg (ty', id', None), no_annot)))]
+     [mk_def (DEF_register (DEC_aux (DEC_reg (ty', id', None), no_annot))) ()]
   | Decl_Config (ty, id, e, _) ->
      let id' = sail_id_of_ident id in
      let ty' = sail_of_ty ctx ty in
      let e' = sail_of_expr ctx e in
-     [mk_def (DEF_register (DEC_aux (DEC_reg (ty', id', Some e'), no_annot)))]
+     [mk_def (DEF_register (DEC_aux (DEC_reg (ty', id', Some e'), no_annot))) ()]
   | Decl_Const (ty, id, e, _) ->
      let id' = sail_id_of_ident id in
      let (ty', tydef) =
@@ -2928,12 +2928,12 @@ let rec sail_of_declaration ctx (decl : ASL_AST.declaration) =
          try
            let nexp = sail_nexp_of_expr ctx e in
            (atom_typ nexp,
-            [mk_def (DEF_type (TD_aux (TD_abbrev (id', mk_typquant [], arg_nexp nexp), no_annot)))])
+            [mk_def (DEF_type (TD_aux (TD_abbrev (id', mk_typquant [], arg_nexp nexp), no_annot))) ()])
          with _ -> (sail_of_ty ctx ty, [])
        else (sail_of_ty ctx ty, [])
      in
      let pat = mk_pat (P_typ (ty', mk_pat (P_id id'))) in
-     [mk_def (DEF_let (mk_letbind pat (sail_of_expr ctx e)))] @ tydef
+     [mk_def (DEF_let (mk_letbind pat (sail_of_expr ctx e))) ()] @ tydef
   | Decl_FunType (ret_ty, id, args, _)
   | Decl_BuiltinFunction (ret_ty, id, args, _)
   | Decl_ArrayGetterType (ret_ty, id, args, _) ->
@@ -3092,9 +3092,9 @@ let rec sail_of_declaration ctx (decl : ASL_AST.declaration) =
      (* Handled separately below *)
      []
   | Decl_Operator1 (op, ids, _) ->
-     [mk_def (DEF_overload (sailify_unop op, List.map sail_id_of_ident ids))]
+     [mk_def (DEF_overload (sailify_unop op, List.map sail_id_of_ident ids)) ()]
   | Decl_Operator2 (op, ids, _) ->
-     [mk_def (DEF_overload (sailify_binop op, List.map sail_id_of_ident ids))]
+     [mk_def (DEF_overload (sailify_binop op, List.map sail_id_of_ident ids)) ()]
   | Decl_DecoderDefn (_, _, _) ->
      print_endline "TODO: Decl_DecoderDefn";
      []
@@ -3168,7 +3168,7 @@ let sail_of_maps ctx (decls: ASL_AST.declaration list) =
     in
     let fallthrough_cl = mk_pexp (Pat_exp (arg_pats, fallthrough')) in
     let clauses' = List.rev (fallthrough_cl :: clauses) in
-    let a = (mk_def_annot Parse_ast.Unknown, empty_uannot) in
+    let a = (mk_def_annot Parse_ast.Unknown (), empty_uannot) in
     let mk_funcl cl = FCL_aux (FCL_funcl (name', cl), a) in
     mk_fundef (List.map mk_funcl clauses')
   in
