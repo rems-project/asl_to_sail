@@ -530,8 +530,8 @@ let rec get_unresolved_quants (err: type_error) =
   let open Type_check in
   match err with
   | Err_unresolved_quants (_, quants, locals, tyvars, ncs) -> [(quants, locals, tyvars, ncs)]
-  | Err_failed_constraint (check, locals, tyvars, ncs)
-  | Err_inner (Err_failed_constraint (check, locals, tyvars, ncs), _, _, _) ->
+  | Err_failed_constraint (check, _, locals, tyvars, ncs)
+  | Err_inner (Err_failed_constraint (check, _, locals, tyvars, ncs), _, _, _) ->
      [([mk_qi_nc check], locals, tyvars, ncs)]
   | Err_no_overloading (_, errs') ->
      List.concat (List.map (fun (_, _, err) -> get_unresolved_quants err) errs')
@@ -553,6 +553,11 @@ let rec get_unresolved_quants (err: type_error) =
   | Err_unbound_id _
   | Err_hint _
   | Err_other _ -> []
+  (* Solve the first alternate alone, because the contexts may differ (in particular, these currently
+     come from if expressions and the context includes the guard in each branch).
+  *)
+  | Err_alternate (_, (_, _, err)::_) -> get_unresolved_quants err
+  | Err_alternate (err, []) -> get_unresolved_quants err
 
 let is_duplicate_def (err: type_error) (Ast.DEF_aux (def, _)) =
   let open Ast in
@@ -679,22 +684,23 @@ let sail_filename base = match !output_dir with
 let ignored_options = [
   ("-lem_extern_type", Arg.String (fun _ -> ()), "");
   ("-coq_extern_type", Arg.String (fun _ -> ()), "");
+  ("-lean_extern_type", Arg.String (fun _ -> ()), "");
 ]
 
-let parse_sail_file filename =
+let parse_sail_file initial_check_ctx filename =
   let parsed_ast = Libsail.Initial_check.parse_file filename |> snd in
   let parsed_ast = Libsail.Preprocess.preprocess !sail_lib_dir None ignored_options parsed_ast in
-  let ast = Libsail.Initial_check.process_ast ~generate:false (Libsail.Parse_ast.Defs [(filename, parsed_ast)]) in
+  let (ast, ctx') = Libsail.Initial_check.process_ast initial_check_ctx (Libsail.Parse_ast.Defs [(Some filename, parsed_ast)]) in
   let vs_ids = val_spec_ids ast.defs in
-  { ast with defs = ast.defs |> Initial_check.generate_undefineds vs_ids |> Initial_check.generate_enum_functions vs_ids }
+  ({ ast with defs = Initial_check.generate_undefineds vs_ids @ ast.defs }, ctx')
 
-let rec interact ?use_patches:(use_patches=true) ctx sail chunk rest =
+let rec interact ?use_patches:(use_patches=true) initial_check_ctx ctx sail chunk rest =
   print_endline (green "\nWhat do you want to do?");
   print_endline ("(p) patch, (x) exit, (s) skip:");
 
   match input_line stdin with
-  | "x" | "exit" -> Constraint.save_digests (); exit 1
-  | "s" | "skip" -> convert_ast ~use_patches ctx rest
+  | "x" | "exit" -> Constraint.save_digests "z3_problems"; exit 1
+  | "s" | "skip" -> convert_ast ~use_patches initial_check_ctx ctx rest
   | "p" | "patch" ->
      begin
        let is_val = is_val_chunk chunk in
@@ -703,12 +709,12 @@ let rec interact ?use_patches:(use_patches=true) ctx sail chunk rest =
        let cmd = get_editor ^ " " ^ patch_file is_val chunk in
        print_endline ("Executing: " ^ cmd);
        ignore (Sys.command cmd);
-       convert_ast ~use_patches ctx (chunk :: rest)
+       convert_ast ~use_patches initial_check_ctx ctx (chunk :: rest)
      end
   | str ->
      begin
        print_endline ("Unrecognised command: " ^ str);
-       interact ~use_patches ctx sail chunk rest
+       interact ~use_patches initial_check_ctx ctx sail chunk rest
      end
 
 and iterate_check ?(modify_val_specs=true) n env sail =
@@ -752,11 +758,11 @@ and iterate_check ?(modify_val_specs=true) n env sail =
      end
   | Type_error (l, err) -> raise (Asl_type_error (sail, l, string_of_type_error err |> fst))
 
-and convert_ast ?use_patches:(use_patches=true) ctx = function
-  | [] -> empty_ast, empty_ast, ctx
+and convert_ast ?use_patches:(use_patches=true) initial_check_ctx ctx = function
+  | [] -> empty_ast, empty_ast, initial_check_ctx, ctx
   | (Chunk_vals [] :: rest) | (Chunk_decls [] :: rest) ->
      incr done_chunks;
-     convert_ast ~use_patches ctx rest
+     convert_ast ~use_patches initial_check_ctx ctx rest
   | (chunk :: rest) ->
      begin
        let (is_forward, decls) = (is_val_chunk chunk, chunk_decls chunk) in
@@ -767,7 +773,7 @@ and convert_ast ?use_patches:(use_patches=true) ctx = function
        if is_forward then print_string (green "F ") else ();
        if not !quiet then print_endline (emph "Processing top" ^ " (" ^ string_of_int !done_chunks ^ "/" ^ string_of_int !num_chunks ^ "): " ^ name_of_chunk chunk);
 
-       let sail =
+       let sail, initial_check_ctx =
          if use_patches && has_patch
          then
            let sail = concat_ast (List.map (Translate_asl.ast_of_declaration ctx) decls) in
@@ -777,7 +783,7 @@ and convert_ast ?use_patches:(use_patches=true) ctx = function
 
            try
              let file = patch_file is_forward chunk in
-             parse_sail_file file
+             parse_sail_file initial_check_ctx file
            with
            | Reporting.Fatal_error e ->
               print_endline (bold "\nFailed to parse patch file: " ^ patch_file is_forward chunk);
@@ -789,7 +795,7 @@ and convert_ast ?use_patches:(use_patches=true) ctx = function
            try
              let (val_decls, decls) = List.partition is_val_decl decls in
              let file = patch_file true chunk in
-             let vals = parse_sail_file file in
+             let vals, initial_check_ctx = parse_sail_file initial_check_ctx file in
              let check_vals () = Type_check.check ctx.tc_env vals in
              let (_, env) = report_sail_error ctx val_decls vals check_vals (fun _ -> exit 1) in
              let ctx = { ctx with tc_env = env } in
@@ -797,7 +803,7 @@ and convert_ast ?use_patches:(use_patches=true) ctx = function
              let sail = Sail_to_sail.rewrite_mutated_parameters sail in
              let sail = Sail_to_sail.eventually_constant sail in
              let sail = Sail_to_sail.vector_exps sail in
-             sail
+             sail, initial_check_ctx
            with
            | Reporting.Fatal_error e ->
               print_endline (bold "\nFailed to parse patch file: " ^ patch_file true chunk);
@@ -815,7 +821,7 @@ and convert_ast ?use_patches:(use_patches=true) ctx = function
              let sail = Sail_to_sail.rewrite_mutated_parameters sail in
              let sail = Sail_to_sail.eventually_constant sail in
              let sail = Sail_to_sail.vector_exps sail in
-             sail
+             sail, initial_check_ctx
            with
            | Failure m ->
               print_endline (bold "Failed to generate sail from ASL:");
@@ -862,17 +868,17 @@ and convert_ast ?use_patches:(use_patches=true) ctx = function
               | _ -> false
             in
             let _, env =
-              Initial_check.generate_enum_functions vals sail.defs
+              Initial_check.generate_enum_number_conversions sail.defs
               |> List.filter is_new_val
               |> Type_check.check_defs env
             in
 
             let ctx = { ctx with tc_env = env } in
-            let (checked_sail', sail', ctx) = convert_ast ~use_patches ctx rest in
-            (append_ast checked_sail checked_sail', append_ast sail sail', ctx))
+            let (checked_sail', sail', initial_check_ctx, ctx) = convert_ast ~use_patches initial_check_ctx ctx rest in
+            (append_ast checked_sail checked_sail', append_ast sail sail', initial_check_ctx, ctx))
          (fun _ ->
             if !interactive
-            then interact ~use_patches ctx sail chunk rest
+            then interact ~use_patches initial_check_ctx ctx sail chunk rest
             else exit 1)
      end
 
@@ -895,7 +901,7 @@ let asl_decls_of_processed_file = function
 
 let load_asl is_prelude filename = LibASL.LoadASL.read_file filename is_prelude false
 
-let process_asl_file ((ctx : Translate_asl.ctx), maps, events, clauses, previous_chunks, previous_files) filename =
+let process_asl_file (initial_check_ctx, (ctx : Translate_asl.ctx), maps, events, clauses, previous_chunks, previous_files) filename =
   let decls = if !quiet then load_asl false filename else time ("Read ASL file " ^ filename) (load_asl false) filename in
 
   let impdef_decls =
@@ -942,13 +948,13 @@ let process_asl_file ((ctx : Translate_asl.ctx), maps, events, clauses, previous
   (* Translate declarations *)
   done_chunks := 0;
   num_chunks := List.length chunks;
-  let (checked_ast, ast, ctx) = convert_ast ctx chunks in
+  let (checked_ast, ast, initial_check_ctx, ctx) = convert_ast initial_check_ctx ctx chunks in
   (*let ast = Sail_to_sail.map_ast (update_effects ctx.tc_env) ast in*)
 
   let chunk_map = List.fold_left (fun m c -> StringMap.add (name_of_chunk c) c m) StringMap.empty chunks in
   let previous_chunks' = StringMap.union (fun _ c1 c2 -> Some (merge_chunks c1 c2)) previous_chunks chunk_map in
   let previous_files' = previous_files @ [ASL_File (filename, decls, append_ast checked_op_ast checked_ast, append_ast op_ast ast)] in
-  (ctx, maps @ maps', events @ events', clauses @ clauses', previous_chunks', previous_files')
+  (initial_check_ctx, ctx, maps @ maps', events @ events', clauses @ clauses', previous_chunks', previous_files')
 
 let process_map_clauses (ctx : Translate_asl.ctx) decls =
   let ast = Translate_asl.ast_of_maps ctx decls in
@@ -968,25 +974,28 @@ let process_event_clauses (ctx : Translate_asl.ctx) decls =
        ASL_File ("event_clauses.asl", decls, checked_ast, ast))
     (fun _ -> exit 1)
 
-let process_sail_file ((ctx : Translate_asl.ctx), maps, events, clauses, previous_chunks, previous_files) filename =
+let process_sail_file (initial_check_ctx, (ctx : Translate_asl.ctx), maps, events, clauses, previous_chunks, previous_files) filename =
   if not !quiet then print_endline ("Reading Sail file " ^ filename);
-  let (ast, env, _) =
-    try parse_sail_file filename |> Libsail.Frontend.check_ast false ctx.tc_env
+  let (initial_check_ctx, ast, env, _) =
+    try
+      let (ast, initial_check_ctx) = parse_sail_file initial_check_ctx filename in
+      let ast, env = Libsail.Type_error.check ctx.tc_env ast in
+      Libsail.Frontend.finalize_ast false initial_check_ctx env ast
     with Reporting.Fatal_error e -> Reporting.print_error e; exit 1
   in
   let previous_files' = previous_files @ [Sail_File (filename, ast)] in
-  ({ ctx with tc_env = env }, maps, events, clauses, previous_chunks, previous_files')
+  (initial_check_ctx, { ctx with tc_env = env }, maps, events, clauses, previous_chunks, previous_files')
 
 let process_file ctx filename =
   if is_asl_filename filename then process_asl_file ctx filename
   else if is_sail_filename filename then process_sail_file ctx filename
   else failwith ("Unrecognised file extension: " ^ filename)
 
-let slice_processed_files fs =
+let slice_processed_files env fs =
   if !slice_roots = [] then fs else begin
     if not !quiet then print_endline "Slicing specification";
     (* Build dependency graph of full specification *)
-    let combined_ast = List.map sail_ast_of_processed_file fs |> List.fold_left append_ast Ast_defs.empty_ast |> Libsail.Scattered.descatter in
+    let combined_ast = List.map sail_ast_of_processed_file fs |> List.fold_left append_ast Ast_defs.empty_ast |> Libsail.Scattered.descatter env in
     let module NodeSet = Set.Make(Callgraph.Node) in
     let module G = Graph.Make(Callgraph.Node) in
     let g = Callgraph.graph_of_ast combined_ast in
@@ -1003,13 +1012,13 @@ let slice_processed_files fs =
     List.map filter_processed_file fs
   end
 
-let generate_stubs ctx processed_files =
+let generate_stubs initial_check_ctx (ctx : Translate_asl.ctx) processed_files =
   let stubs =
     if !gen_stubs then begin
       (* Determine declared but not defined functions *)
       if not !quiet then print_endline "Generating stubs for missing functions";
       let decls = List.concat (List.map asl_decls_of_processed_file processed_files) in
-      let ast = List.map sail_ast_of_processed_file processed_files |> List.fold_left append_ast Ast_defs.empty_ast |> Libsail.Scattered.descatter in
+      let ast = List.map sail_ast_of_processed_file processed_files |> List.fold_left append_ast Ast_defs.empty_ast |> Libsail.Scattered.descatter ctx.tc_env in
       let defined_sail_funs = List.map get_fundef_id ast.defs |> List.concat |> IdSet.of_list in
       let is_undefined id =
         let id' = Translate_asl.sail_id_of_ident id in
@@ -1034,7 +1043,7 @@ let generate_stubs ctx processed_files =
       let chunks = List.map (fun decl -> Chunk_decls [decl]) stubs in
       let quiet_orig = !quiet in
       quiet := true;
-      let (checked_ast, ast, _ctx) = convert_ast ~use_patches:false ctx chunks in
+      let (checked_ast, ast, _initial_check_ctx, _ctx) = convert_ast ~use_patches:false initial_check_ctx ctx chunks in
       quiet := quiet_orig;
       [ASL_File ("stubs.asl", stubs, checked_ast, ast)]
     end else []
@@ -1059,7 +1068,7 @@ let main () : unit =
     else ();
 
     Reporting.opt_warnings := false;
-    Constraint.load_digests ();
+    Constraint.load_digests "z3_problems";
     Libsail.Nl_flow.opt_nl_flow := true;
     Type_check.opt_expand_valspec := false; (* Preserve type abbreviations in val-specs for callgraph computation and slicing *)
 
@@ -1070,23 +1079,23 @@ let main () : unit =
     (* Type_check.opt_new_bitfields := true; *)
 
     (* Load the Sail prelude for ARM *)
-    let ctx = process_sail_file (ctx, [], [], [], StringMap.empty, []) (sail_filename "prelude") in
+    let ctx = process_sail_file (Initial_check.initial_ctx, ctx, [], [], [], StringMap.empty, []) (sail_filename "prelude") in
 
     (* Load the ASL prelude *)
     let _  = LibASL.LoadASL.read_file "prelude.asl" true false in
 
     (* Translate files *)
-    let (ctx, maps, events, clauses, _, processed_files) = List.fold_left process_file ctx !input_files in
+    let (initial_check_ctx, ctx, maps, events, clauses, _, processed_files) = List.fold_left process_file ctx !input_files in
     let processed_files =
       processed_files
       @ [process_map_clauses ctx (maps @ clauses); process_event_clauses ctx (events @ clauses)]
-      |> generate_stubs ctx
-      |> slice_processed_files
+      |> generate_stubs initial_check_ctx ctx
+      |> slice_processed_files ctx.tc_env
     in
     if not !quiet then print_endline "Writing generated files";
     List.iter write_processed_file processed_files;
 
-    Constraint.save_digests ();
+    Constraint.save_digests "z3_problems";
   end
 
 let () =

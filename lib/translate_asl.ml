@@ -800,7 +800,7 @@ let construct_pexp (pat, guard) exp =
 
 let combine_guards op g1 g2 =
   match (g1, g2) with
-  | (Some g1, Some g2) -> Some (mk_exp (E_app_infix (g1, mk_id op, g2)))
+  | (Some g1, Some g2) -> Some (mk_exp (E_app_infix (g1, mk_operator op, g2)))
   | (Some g1, None) -> Some g1
   | (None, Some g2) -> Some g2
   | (None, None) -> None
@@ -1501,9 +1501,9 @@ let rec sail_of_expr ctx (expr : ASL_AST.expr) =
      mk_exp (E_app (mk_id "in_range", [e'; r1'; r2']))
   | ASL_AST.Expr_In (e, ASL_AST.Pat_Set (p :: ps))
     when List.for_all is_expr_pattern (p :: ps) ->
-     let p' = mk_exp (E_app_infix (recur e, mk_id "==", recur (expr_of_pattern p))) in
+     let p' = mk_exp (E_app_infix (recur e, mk_operator "==", recur (expr_of_pattern p))) in
      let rest = ASL_AST.Expr_In (e, ASL_AST.Pat_Set ps) in
-     if ps = [] then p' else mk_exp (E_app_infix (p', mk_id "|", recur rest))
+     if ps = [] then p' else mk_exp (E_app_infix (p', mk_operator "|", recur rest))
   (* TODO: Handle more special cases? Pat_LitMask could be handled using a match_mask helper function in Sail, for example, maybe even with infix syntax. *)
   | ASL_AST.Expr_In (e, pat) ->
      let pats =
@@ -1531,10 +1531,10 @@ and sail_of_binop e1 op e2 =
      | E_lit (L_aux (L_num two, _)) when Big_int.equal two (Big_int.of_int 2) ->
         mk_exp (E_app (mk_id "pow2", [e2]))
      | _ ->
-        mk_exp (E_app_infix (e1, Id_aux (Id "^", l), e2))
+        mk_exp (E_app_infix (e1, mk_operator ~loc:l "^", e2))
      end
   | Id_aux (Operator op', l) ->
-     mk_exp (E_app_infix (e1, Id_aux (Id op', l), e2))
+     mk_exp (E_app_infix (e1, mk_operator ~loc:l op', e2))
   | Id_aux (Id _, _) as id' ->
      mk_exp (E_app (id', [e1; e2]))
   end
@@ -1553,8 +1553,8 @@ and sail_slice_exps (ctx : ctx) (slice : ASL_AST.slice) =
     | (Some int1, Some int2) ->
        mk_lit_exp (L_num (Big_int.pred (Big_int.add int1 int2)))
     | _ ->
-       let sum = mk_exp (E_app_infix (i1', mk_id "+", i2')) in
-       mk_exp (E_app_infix (sum, mk_id "-", mk_lit_exp (L_num (Big_int.of_int 1))))
+       let sum = mk_exp (E_app_infix (i1', mk_operator "+", i2')) in
+       mk_exp (E_app_infix (sum, mk_operator "-", mk_lit_exp (L_num (Big_int.of_int 1))))
   in
   if lowd then
     ((fun e -> mk_exp (E_app (mk_id "Slice", [e; i1'; i2']))),
@@ -1742,7 +1742,7 @@ and sail_of_pat ctx (p : ASL_AST.pattern) =
      let id_exp = mk_exp (E_id (sail_id_of_ident id)) in
      let var_exp = mk_exp (E_id (mk_id "?")) in
      let var_pat = mk_pat (P_id (mk_id "?")) in
-     (var_pat, Some (mk_exp (E_app_infix (var_exp, mk_id "==", id_exp))))
+     (var_pat, Some (mk_exp (E_app_infix (var_exp, mk_operator "==", id_exp))))
   | ASL_AST.Pat_Wildcard ->
      (mk_pat (P_wild), None)
   | ASL_AST.Pat_LitMask lits ->
@@ -2675,7 +2675,7 @@ let rec bitfields_of_decls = function
 
 let and_bool_opt exp1 exp2 = match (exp1, exp2) with
   | (Some exp, None) | (None, Some exp) -> Some exp
-  | (Some exp1, Some exp2) -> Some (mk_exp (E_app_infix (exp1, mk_id "&", exp2)))
+  | (Some exp1, Some exp2) -> Some (mk_exp (E_app_infix (exp1, mk_operator "&", exp2)))
   | (None, None) -> None
 
 let decoder_num = ref Big_int.zero
@@ -2755,7 +2755,7 @@ let sail_decoder_clause ctx = function
           Some (List.fold_left subst_field exp getters)
      in
      decoder_num := Big_int.succ !decoder_num;
-     let see_check = if !opt_see_checks then Some (mk_exp (E_app_infix (mk_exp (E_id (mk_id "SEE")), mk_id "<", mk_lit_exp (L_num !decoder_num)))) else None in
+     let see_check = if !opt_see_checks then Some (mk_exp (E_app_infix (mk_exp (E_id (mk_id "SEE")), mk_operator "<", mk_lit_exp (L_num !decoder_num)))) else None in
      let see_update = if !opt_see_checks then [mk_exp (E_assign (mk_lexp (LE_id (mk_id "SEE")), mk_lit_exp (L_num !decoder_num)))] else [] in
      let clause_guard = and_bool_opt (and_bool_opt guard' pguard) see_check in
      let decode_id = add_name_prefix "decode" id in

@@ -124,9 +124,9 @@ let rec map_pat f (P_aux (p_aux, l)) =
   | P_tuple pats ->
      let p_aux = P_tuple (List.map (map_pat f) pats) in
      f (rewrap p_aux)
-  | P_struct (fpats, fwild) ->
+  | P_struct (name, fpats, fwild) ->
      let map_fpat (id, pat) = (id, map_pat f pat) in
-     let p_aux = P_struct (List.map map_fpat fpats, fwild) in
+     let p_aux = P_struct (name, List.map map_fpat fpats, fwild) in
      f (rewrap p_aux)
   | P_list pats ->
      let p_aux = P_list (List.map (map_pat f) pats) in
@@ -215,8 +215,8 @@ let rec map_exp alg (E_aux (exp_aux, l)) =
   | E_cons (exp1, exp2) ->
      let exp_aux = E_cons (map_exp alg exp1, map_exp alg exp2) in
      alg.f_exp (rewrap exp_aux)
-  | E_struct fexps ->
-     let exp_aux = E_struct (List.map (map_fexp alg) fexps) in
+  | E_struct (name, fexps) ->
+     let exp_aux = E_struct (name, List.map (map_fexp alg) fexps) in
      alg.f_exp (rewrap exp_aux)
   | E_struct_update (exp, fexps) ->
      let exp_aux = E_struct_update (map_exp alg exp, List.map (map_fexp alg) fexps) in
@@ -484,12 +484,12 @@ and rewrite_nconstraint_nexp f (NC_aux (nc_aux, l)) =
   let rewrap nc_aux = NC_aux (nc_aux, l) in
   let recur nc = rewrite_nconstraint_nexp f nc in
   match nc_aux with
-  | NC_equal (nexp1, nexp2) -> rewrap (NC_equal (f nexp1, f nexp2))
-  | NC_bounded_ge (nexp1, nexp2) -> rewrap (NC_bounded_ge (f nexp1, f nexp2))
-  | NC_bounded_gt (nexp1, nexp2) -> rewrap (NC_bounded_gt (f nexp1, f nexp2))
-  | NC_bounded_le (nexp1, nexp2) -> rewrap (NC_bounded_le (f nexp1, f nexp2))
-  | NC_bounded_lt (nexp1, nexp2) -> rewrap (NC_bounded_lt (f nexp1, f nexp2))
-  | NC_not_equal (nexp1, nexp2) -> rewrap (NC_not_equal (f nexp1, f nexp2))
+  | NC_equal (arg1, arg2) -> rewrap (NC_equal (rewrite_typ_arg_nexp f arg1, rewrite_typ_arg_nexp f arg2))
+  | NC_ge (nexp1, nexp2) -> rewrap (NC_ge (f nexp1, f nexp2))
+  | NC_gt (nexp1, nexp2) -> rewrap (NC_gt (f nexp1, f nexp2))
+  | NC_le (nexp1, nexp2) -> rewrap (NC_le (f nexp1, f nexp2))
+  | NC_lt (nexp1, nexp2) -> rewrap (NC_lt (f nexp1, f nexp2))
+  | NC_not_equal (arg1, arg2) -> rewrap (NC_not_equal (rewrite_typ_arg_nexp f arg1, rewrite_typ_arg_nexp f arg2))
   | NC_set (kid, is) -> rewrap (NC_set (kid, is))
   | NC_or (nc1, nc2) -> rewrap (NC_or (recur nc1, recur nc2))
   | NC_and (nc1, nc2) -> rewrap (NC_and (recur nc1, recur nc2))
@@ -825,7 +825,7 @@ let compare_local (mut1, typ1) (mut2, typ2) =
   | Mutable, Immutable -> 1
 
 let compare_type_variables (tyvars1 : type_variables) (tyvars2 : type_variables) =
-  let compare_kind_aux (l1, k1) (l2, k2) = Kind.compare (K_aux (k1, l1)) (K_aux (k2, l2)) in
+  let compare_kind_aux (l1, k1, _) (l2, k2, _) = Kind.compare (K_aux (k1, l1)) (K_aux (k2, l2)) in
   let v = KBindings.compare compare_kind_aux tyvars1.vars tyvars2.vars in
   if v = 0 then KBindings.compare compare tyvars1.shadows tyvars2.shadows else v
 
@@ -838,7 +838,7 @@ let filter_type_variables kopts (tyvars : type_variables) : type_variables =
 let kopts_of_quant_items qis = List.map kopts_of_quant_item qis |> List.fold_left KOptSet.union KOptSet.empty
 
 let mk_local_env (tyvars : Libsail.Type_env.type_variables) ncs global_env =
-  let add kid (l, kind) env = Type_check.Env.add_typ_var l (mk_kopt kind kid) env in
+  let add kid (l, kind, _) env = Type_check.Env.add_typ_var l (mk_kopt kind kid) env in
   KBindings.fold add tyvars.vars global_env
   |> List.fold_right Env.add_constraint ncs
 
