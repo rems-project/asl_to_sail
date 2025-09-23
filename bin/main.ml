@@ -23,6 +23,14 @@ module SS = Set.Make(String)
 module Translate_asl = Asl_to_sail.Translate_asl
 module Sail_to_sail = Asl_to_sail.Sail_to_sail
 
+let output_ast f d =
+  let module Fmt = Sail_PP.Printer (struct
+    let insert_braces = false
+    let resugar = true
+    let hide_attributes = false
+  end) in
+  PPrint.ToChannel.pretty 1. 80 f (Fmt.doc_ast d)
+
 let time (s : string) (f : 'a -> 'b) (x : 'a) : 'b =
   let t = Sys.time() in
   let fx = f x in
@@ -319,7 +327,7 @@ let write_sail (sail_ast : sail_ast) (filename : string) : unit =
   let (temp_filename, o) = Filename.open_temp_file (Filename.basename filename) "_temp.sail" in
   begin
     output_string o (get_header ());
-    Sail_PP.output_ast o sail_ast;
+    output_ast o sail_ast;
     close_out o;
     Util.move_file temp_filename filename;
   end
@@ -600,7 +608,7 @@ let report_sail_error (ctx: Translate_asl.ctx) decls sail convert continue =
      print_endline (bold "\nConverting ASL:");
      List.iter print_decl decls;
      print_endline (bold "\nFailed to typecheck the following sail:");
-     Sail_PP.output_ast stdout sail;
+     output_ast stdout sail;
      print_endline (bold "\nDerivation:");
      Type_check.set_tc_debug 1;
      let _, _ =
@@ -614,7 +622,7 @@ let report_sail_error (ctx: Translate_asl.ctx) decls sail convert continue =
      continue ()
   | Reporting.Fatal_error e ->
      print_endline (bold "Sail fatal error when processing:");
-     Sail_PP.output_ast stdout sail;
+     output_ast stdout sail;
      Reporting.print_error e;
      exit 1
 

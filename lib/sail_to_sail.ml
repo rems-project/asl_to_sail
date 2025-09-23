@@ -27,6 +27,8 @@ let id_append id str =
   match id with
   | Id_aux (Id v, l) -> Id_aux (Id (v ^ "__" ^ str), l)
   | Id_aux (Operator _, _) -> failwith "Cannot append to infix id"
+  | Id_aux (And_bool, _) -> failwith "Cannot append to and_bool"
+  | Id_aux (Or_bool, _) -> failwith "Cannot append to or_bool"
 
 let rename_funcl f (FCL_aux (FCL_funcl (id, pexp), annot)) =
   FCL_aux (FCL_funcl (f id, pexp), annot)
@@ -179,9 +181,6 @@ let rec map_exp alg (E_aux (exp_aux, l)) =
   | E_app (id, exps) ->
      let exp_aux = E_app (id, List.map (map_exp alg) exps) in
      alg.f_exp (rewrap exp_aux)
-  | E_app_infix (exp1, id, exp2) ->
-     let exp_aux = E_app_infix (map_exp alg exp1, id, map_exp alg exp2) in
-     alg.f_exp (rewrap exp_aux)
   | E_tuple exps ->
      let exp_aux = E_tuple (List.map (map_exp alg) exps) in
      alg.f_exp (rewrap exp_aux)
@@ -193,18 +192,6 @@ let rec map_exp alg (E_aux (exp_aux, l)) =
      alg.f_exp (rewrap exp_aux)
   | E_vector exps ->
      let exp_aux = E_vector (List.map (map_exp alg) exps) in
-     alg.f_exp (rewrap exp_aux)
-  | E_vector_access (exp1, exp2) ->
-     let exp_aux = E_vector_access (map_exp alg exp1, map_exp alg exp2) in
-     alg.f_exp (rewrap exp_aux)
-  | E_vector_subrange (exp1, exp2, exp3) ->
-     let exp_aux = E_vector_subrange (map_exp alg exp1, map_exp alg exp2, map_exp alg exp3) in
-     alg.f_exp (rewrap exp_aux)
-  | E_vector_update (exp1, exp2, exp3) ->
-     let exp_aux = E_vector_update (map_exp alg exp1, map_exp alg exp2, map_exp alg exp3) in
-     alg.f_exp (rewrap exp_aux)
-  | E_vector_update_subrange (exp1, exp2, exp3, exp4) ->
-     let exp_aux = E_vector_update_subrange (map_exp alg exp1, map_exp alg exp2, map_exp alg exp3, map_exp alg exp4) in
      alg.f_exp (rewrap exp_aux)
   | E_vector_append (exp1, exp2) ->
      let exp_aux = E_vector_append (map_exp alg exp1, map_exp alg exp2) in
@@ -661,10 +648,10 @@ let vector_exps defs =
     (* | E_app (Id_aux (Id "UInt", _), [E_aux (E_vector_subrange (v, hi, lo), _)])
       when not (is_constant hi && is_constant lo) ->
        rewrap (E_app (mk_id "unsigned_subrange", [v; hi; lo])) *)
-    | E_app (Id_aux (Id "IsZero", _), [E_aux (E_vector_subrange (v, hi, lo), _)])
+    | E_app (Id_aux (Id "IsZero", _), [E_aux (E_app (Id_aux (Id "vector_subrange#", _), [v; hi; lo]), _)])
       when not (is_constant hi && is_constant lo) ->
        rewrap (E_app (mk_id "is_zero_subrange", [v; hi; lo]))
-    | E_app (Id_aux (Id "IsOnes", _), [E_aux (E_vector_subrange (v, hi, lo), _)])
+    | E_app (Id_aux (Id "IsOnes", _), [E_aux (E_app (Id_aux (Id "vector_subrange#", _), [v; hi; lo]), _)])
       when not (is_constant hi && is_constant lo) ->
        rewrap (E_app (mk_id "is_ones_subrange", [v; hi; lo]))
     | _ -> exp
@@ -746,12 +733,10 @@ let rec blocks (E_aux (aux, _) as exp) =
      List.concat (List.map blocks exps)
   | E_if (cond, then_exp, else_exp) ->
      blocks cond @ blocks then_exp @ blocks else_exp
-  | E_app_infix (exp1, _, exp2) | E_loop (_, _, exp1, exp2) | E_vector_access (exp1, exp2)
+  | E_loop (_, _, exp1, exp2)
     | E_vector_append (exp1, exp2) | E_cons (exp1, exp2) | E_assert (exp1, exp2) | E_internal_plet (_, exp1 ,exp2) ->
      blocks exp1 @ blocks exp2
-  | E_vector_subrange (exp1, exp2, exp3) | E_vector_update (exp1, exp2, exp3) ->
-     blocks exp1 @ blocks exp2 @ blocks exp3
-  | E_for (_, exp1, exp2, exp3, _, exp4) | E_vector_update_subrange (exp1, exp2, exp3, exp4) ->
+  | E_for (_, exp1, exp2, exp3, _, exp4) ->
      blocks exp1 @ blocks exp2 @ blocks exp3 @ blocks exp4
   | E_typ (_, exp) | E_internal_return exp | E_exit exp | E_throw exp | E_field (exp, _) | E_return exp | E_internal_assume (_, exp) ->
      blocks exp
