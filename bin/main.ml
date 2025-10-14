@@ -118,6 +118,9 @@ let options = Arg.align ([
   ( "-stop_at",
     Arg.String (fun l -> stop_at := !stop_at @ (String.split_on_char ',' l)),
     " stop at functions in the given comma-separated list and allow patching");
+  ( "-uninit_default",
+    Arg.Set Translate_asl.opt_default_init,
+    " set uninitialised local variables to default values rather than undefined");
 ])
 
 let ident_loc_of_decl (decl : declaration) : (ident * l) =

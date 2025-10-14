@@ -16,6 +16,7 @@ module ASL_TC = LibASL.Tcheck
 module ASL_Utils = LibASL.Asl_utils
 
 let opt_see_checks = ref true
+let opt_default_init = ref false
 
 type lvar =
   | Owned of mut * typ
@@ -1371,6 +1372,19 @@ and add_final_return_optstmts = function
   | Some stmts -> Some (add_final_return_stmt stmts)
   | None -> None
 
+let rec default_init (Typ_aux (ty, _) as typ) =
+  match ty with
+  | Typ_id (Id_aux (Id "nat", _))
+  | Typ_id (Id_aux (Id "int", _)) -> mk_lit_exp (L_num Big_int_Z.zero_big_int)
+  | Typ_id (Id_aux (Id "bool", _)) -> mk_lit_exp L_false
+  | Typ_id (Id_aux (Id "bit", _)) -> mk_lit_exp L_zero
+  | Typ_id (Id_aux (Id "real", _)) -> mk_lit_exp (L_real "0.0")
+  | Typ_id id -> mk_exp (E_app (prepend_id "__default_" id, [mk_lit_exp L_unit]))
+  | Typ_app (Id_aux (Id ("bitvector" | "bits"), _), [A_aux (A_nexp size, _)]) -> mk_exp (E_app (mk_id "Zeros", [mk_exp (E_sizeof size)]))
+  | Typ_app (Id_aux (Id "vector", _), [A_aux (A_nexp size, _); A_aux (A_typ typ', _)]) ->
+    mk_exp (E_app (mk_id "vector_init", [mk_exp (E_sizeof size); default_init typ']))
+  | _ -> failwith ("Unsupported type for default values: " ^ string_of_typ typ)
+
 let args_of_exps args =
   if args = [] then [mk_lit_exp L_unit] else args
 
@@ -2204,7 +2218,7 @@ and sail_block_of_stmts (ctx : ctx) (stmts : ASL_AST.stmt list) : uannot exp lis
             && Bindings.mem id constraints then
            (sail_typ_of_int_constraint id (Bindings.find id constraints),
             initial_exp_of_int_constraint (Bindings.find id constraints))
-         else (ty', mk_lit_exp L_undef)
+         else (ty', if !opt_default_init then default_init ty' else mk_lit_exp L_undef)
        in
        let id' = sail_id_of_ident id in
        let ctx' = declare_local id ty' ctx in
@@ -2887,21 +2901,65 @@ let rec sail_of_declaration ctx (decl : ASL_AST.declaration) =
      let field' (ty, id) = (sail_of_ty ctx ty, sail_id_of_ident id) in
      let tvars = ASL_Utils.unionSets (List.map (fun (ty, _) -> ASL_Utils.fv_type ty) fields) in
      let tq = mk_typquant (List.map mk_qi_kopt (kopts_of_vars ctx tvars)) in
-     [mk_def (DEF_type (TD_aux (TD_record (id', tq, List.map field' fields, false), no_annot))) ()]
+     let fields' = List.map field' fields in
+     let default_fn = if IdentSet.is_empty tvars then
+         let fun_id = prepend_id "__default_" id' in
+         let fun_typ = function_typ [unit_typ] (mk_id_typ id') in
+         let typschm = mk_typschm (mk_typquant []) fun_typ in
+         let pat = mk_pat (P_lit (mk_lit L_unit)) in
+         let body = mk_exp (E_struct (SN_id id', List.map (fun (ty, id) -> mk_fexp id (default_init ty)) fields')) in
+         [mk_val_spec (VS_val_spec (typschm, fun_id, None));
+          mk_fundef [mk_funcl fun_id pat body]]
+       else []
+     in
+     [mk_def (DEF_type (TD_aux (TD_record (id', tq, fields', false), no_annot))) ()]
+     @ default_fn
      @ (if IdentSet.is_empty tvars then unknown_fun id' (mk_id_typ id') else [])
   | Decl_Typedef (id, Type_Register (len, ((_ :: _) as fields)), _) ->
-     [sail_bitfield_of_regtype ctx (sail_type_id_of_ident id) len fields]
+     let id' = sail_type_id_of_ident id in
+     let default_fn =
+         let fun_id = prepend_id "__default_" id' in
+         let fun_typ = function_typ [unit_typ] (mk_id_typ id') in
+         let typschm = mk_typschm (mk_typquant []) fun_typ in
+         let pat = mk_pat (P_lit (mk_lit L_unit)) in
+         let body = Libsail.Bitfield.construct_bitfield_exp id'
+             (mk_exp (E_app (mk_id "Zeros", [mk_lit_exp (L_num (int_of_intLit len))]))) in
+         [mk_val_spec (VS_val_spec (typschm, fun_id, None));
+          mk_fundef [mk_funcl fun_id pat body]]
+     in
+     [sail_bitfield_of_regtype ctx (sail_type_id_of_ident id) len fields] @
+     default_fn
   | Decl_Typedef (id, ty, _) ->
      let id' = sail_type_id_of_ident id in
      let ty' = sail_of_ty ctx ty in
      let kopts = kopts_of_vars ctx (ASL_Utils.fv_type ty) in
      let tq = mk_typquant (List.map mk_qi_kopt kopts) in
+     let default_fn =
+         let fun_id = prepend_id "__default_" id' in
+         let fun_typ = function_typ [unit_typ] (mk_id_typ id') in
+         let typschm = mk_typschm (mk_typquant []) fun_typ in
+         let pat = mk_pat (P_lit (mk_lit L_unit)) in
+         let body = default_init ty' in
+         [mk_val_spec (VS_val_spec (typschm, fun_id, None));
+          mk_fundef [mk_funcl fun_id pat body]]
+     in
      [mk_def (DEF_type (TD_aux (TD_abbrev (id', tq, arg_typ ty'), no_annot))) ()]
+     @ default_fn
      @ (if kopts = [] then unknown_fun id' ty' else [])
   | Decl_Enum (id, ids, _) ->
      let id' = sail_type_id_of_ident id in
      let ids' = List.map sail_id_of_ident ids in
+     let default_fn =
+         let fun_id = prepend_id "__default_" id' in
+         let fun_typ = function_typ [unit_typ] (mk_id_typ id') in
+         let typschm = mk_typschm (mk_typquant []) fun_typ in
+         let pat = mk_pat (P_lit (mk_lit L_unit)) in
+         let body = mk_exp (E_id (List.hd ids')) in
+         [mk_val_spec (VS_val_spec (typschm, fun_id, None));
+          mk_fundef [mk_funcl fun_id pat body]]
+     in
      [mk_def (DEF_type (TD_aux (TD_enum (id', ids', false), no_annot))) ()]
+     @ default_fn
      @ unknown_fun id' (mk_id_typ id')
   | Decl_Var (Type_Register (len, ((_ :: _) as fields)), id, _) ->
      let id' = sail_id_of_ident id in
