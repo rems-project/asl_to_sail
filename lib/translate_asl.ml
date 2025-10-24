@@ -18,6 +18,32 @@ module ASL_Utils = LibASL.Asl_utils
 let opt_see_checks = ref true
 let opt_default_init = ref false
 
+let parse_hex h =
+  match Libsail.Initial_check.parse_hex_lit h with
+  | Some l -> l
+  | None -> failwith ("Bad hex literal: " ^ h)
+
+let parse_bin b =
+  match Libsail.Initial_check.parse_bin_lit b with
+  | Some b -> b
+  | None -> failwith ("Bad binary literal: " ^ b)
+
+let mk_vector_access e1 e2 =
+  let attr = Libsail.Initial_check.notation_attr Parse_ast.Unknown 10 ["10"; "["; "0"; "]"] empty_uannot in
+  E_aux (vector_access e1 e2, (Parse_ast.Unknown, attr))
+
+let mk_vector_subrange e i1 i2 =
+  let attr = Libsail.Initial_check.notation_attr Parse_ast.Unknown 10 ["10"; "["; "0"; " .. "; "0"; "]"] empty_uannot in
+  E_aux (vector_subrange e i1 i2, (Parse_ast.Unknown, attr))
+
+let mk_vector_update e1 e2 e3 =
+  let attr = Libsail.Initial_check.notation_attr Parse_ast.Unknown 10 ["["; "0"; " with "; "10"; " = "; "0"; "]"] empty_uannot in
+  E_aux (vector_update e1 e2 e3, (Parse_ast.Unknown, attr))
+
+let mk_vector_update_subrange e1 e2 e3 e4 =
+  let attr = Libsail.Initial_check.notation_attr Parse_ast.Unknown 10 ["["; "0"; " with "; "10"; " .. "; "10"; " = "; "0"; "]"] empty_uannot in
+  E_aux (vector_update_subrange e1 e2 e3 e4, (Parse_ast.Unknown, attr))
+
 type lvar =
   | Owned of mut * typ
   | Shared of mut * typ
@@ -1410,7 +1436,7 @@ let rec sail_of_expr ctx (expr : ASL_AST.expr) =
         let f' = sail_id_of_ident f in
         let typ_id = Option.get (get_typ_id ctx.tc_env typ) in
         if has_sail_bitfield ctx typ_id f' then
-          mk_exp (Ast_util.vector_access (recur e) (mk_exp (E_id f')))
+          mk_vector_access (recur e) (mk_exp (E_id f'))
         else begin match get_bitfield_slices ctx typ_id f' with
           | Some [slice] ->
              (* let (hi, lo) = sail_range_exps_of_slice ctx slice in *)
@@ -1418,7 +1444,7 @@ let rec sail_of_expr ctx (expr : ASL_AST.expr) =
              sail_slice_exp ctx slice e'
              (* mk_exp (E_vector_subrange (e', hi, lo)) *)
           | Some slices -> failwith ("unsupported bitfield type in exp " ^ pp_expr expr ^ " : " ^ pp_to_string (pp_slices slices))
-          | None -> mk_exp (Ast_util.vector_access (recur e) (mk_exp (E_id f')))
+          | None -> mk_vector_access (recur e) (mk_exp (E_id f'))
         end
      | _ ->
         mk_exp (E_field (recur e, sail_id_of_ident f))
@@ -1431,7 +1457,7 @@ let rec sail_of_expr ctx (expr : ASL_AST.expr) =
      failwith ("sail_of_expr: Empty Expr_Fields")
   | ASL_AST.Expr_Slices (Expr_LitHex h, [slice])
     when slice_low_idx slice = Expr_LitInt "0" && const_width_slice slice ->
-     let h' = mk_lit_exp (L_hex h) in
+     let h' = mk_lit_exp (L_hex (parse_hex h)) in
      let width = Big_int.of_int (width_of_hexLit h) in
      let width' = int_of_slice_width slice in
      if Big_int.equal width' width then h' else
@@ -1447,7 +1473,7 @@ let rec sail_of_expr ctx (expr : ASL_AST.expr) =
      in
      begin match slice with
        | Slice_Single idx ->
-          mk_exp (E_vector [mk_exp (Ast_util.vector_access e' (recur idx))])
+          mk_exp (E_vector [mk_vector_access e' (recur idx)])
        | _ ->
           sail_slice_exp ctx slice e'
      end
@@ -1499,13 +1525,13 @@ let rec sail_of_expr ctx (expr : ASL_AST.expr) =
        mk_exp (E_app (sail_id_of_ident f, args_of_exps (implicits' @ args')))
   | ASL_AST.Expr_Array (e, idx) ->
      let idx' = recur idx |> coerce_exp ctx.tc_env (infer_sail_expr_typ ctx idx) (Some int_typ) in
-     mk_exp (Ast_util.vector_access (recur e) idx')
+     mk_vector_access (recur e) idx'
   | ASL_AST.Expr_Tuple es ->
      mk_exp (E_tuple (List.map recur es))
   | ASL_AST.Expr_LitInt i -> mk_lit_exp (L_num (int_of_intLit i))
-  | ASL_AST.Expr_LitHex h -> mk_exp (E_app (mk_id "UInt", [mk_lit_exp (L_hex h)]))
+  | ASL_AST.Expr_LitHex h -> mk_exp (E_app (mk_id "UInt", [mk_lit_exp (L_hex (parse_hex h))]))
   | ASL_AST.Expr_LitReal r -> mk_lit_exp (L_real r)
-  | ASL_AST.Expr_LitBits b -> mk_lit_exp (L_bin (remove_spaces b))
+  | ASL_AST.Expr_LitBits b -> mk_lit_exp (L_bin (parse_bin (remove_spaces b)))
   | ASL_AST.Expr_LitString s -> mk_lit_exp (L_string s)
   | ASL_AST.Expr_In (_, ASL_AST.Pat_Set []) -> mk_lit_exp (L_false)
   | ASL_AST.Expr_In (e, ASL_AST.Pat_Set [ASL_AST.Pat_Range (r1, r2)]) ->
@@ -1575,9 +1601,9 @@ and sail_slice_exps (ctx : ctx) (slice : ASL_AST.slice) =
     ((fun le -> mk_lexp (LE_vector_range (le, i12', i1'))),
      (fun e e' -> mk_exp (E_app (mk_id "SetSlice", [i2'; e; i1'; e'])))))
   else
-    ((fun e -> mk_exp (Ast_util.vector_subrange e i1' i2')),
+    ((fun e -> mk_vector_subrange e i1' i2'),
     ((fun le -> mk_lexp (LE_vector_range (le, i1', i2'))),
-     (fun e e' -> mk_exp (Ast_util.vector_update_subrange e i1' i2' e'))))
+     (fun e e' -> mk_vector_update_subrange e i1' i2' e')))
 and sail_slice_exp ctx slice = fst (sail_slice_exps ctx slice)
 and sail_slice_lexp ctx slice = fst (snd (sail_slice_exps ctx slice))
 and sail_slice_update_exp ctx slice = snd (snd (sail_slice_exps ctx slice))
@@ -1745,7 +1771,7 @@ and sail_of_pat ctx (p : ASL_AST.pattern) =
   | ASL_AST.Pat_LitHex h ->
      (mk_pat (P_lit (mk_lit (L_num (int_of_hexLit h)))), None)
   | ASL_AST.Pat_LitBits b ->
-     (mk_pat (P_lit (mk_lit (L_bin (remove_spaces b)))), None)
+     (mk_pat (P_lit (mk_lit (L_bin (parse_bin (remove_spaces b))))), None)
   | ASL_AST.Pat_Const id when pprint_ident id = "TRUE" ->
      (mk_pat (P_lit (mk_lit L_true)), None)
   | ASL_AST.Pat_Const id when pprint_ident id = "FALSE" ->
@@ -2008,11 +2034,11 @@ and sail_of_stmt ctx (stmt : ASL_AST.stmt) =
           let typ' = sail_of_ty ctx typ in
           let typ_id = Option.get (get_typ_id ctx.tc_env typ') in
           if has_sail_bitfield ctx typ_id f' then
-            mk_exp (Ast_util.vector_update rexp (mk_exp (E_id f')) e')
+            mk_vector_update rexp (mk_exp (E_id f')) e'
           else begin match get_bitfield_slices ctx typ_id f' with
             | Some [slice] ->
               let (hi, lo) = sail_range_exps_of_slice ctx slice in
-              mk_exp (Ast_util.vector_update_subrange rexp hi lo e')
+              mk_vector_update_subrange rexp hi lo e'
             | _ -> failwith ("unsupported bitfield type in " ^ pp_lexpr le)
           end
        | _ ->
@@ -2673,8 +2699,9 @@ let rec index_range_of_slices ctx = function
 
 let sail_bitfield_of_regtype ctx id len fields =
   let len' = int_of_intLit len in
+  let no_def_annot = mk_def_annot Parse_ast.Unknown () in
   let mk_field (slices, id) =
-    try Some (sail_id_of_ident id, index_range_of_slices ctx slices) with _ -> None
+    try Some ((sail_id_of_ident id, index_range_of_slices ctx slices), no_def_annot) with _ -> None
   in
   let fields' = Util.option_these (List.map mk_field fields) in
   mk_def (DEF_type (TD_aux (TD_bitfield (id, bits_typ (nconstant len'), fields'), no_annot))) ()
@@ -2898,7 +2925,8 @@ let rec sail_of_declaration ctx (decl : ASL_AST.declaration) =
   match decl with
   | Decl_Record (id, fields, _) ->
      let id' = sail_type_id_of_ident id in
-     let field' (ty, id) = (sail_of_ty ctx ty, sail_id_of_ident id) in
+     let no_def_annot = mk_def_annot Parse_ast.Unknown () in
+     let field' (ty, id) = ((sail_id_of_ident id, sail_of_ty ctx ty), no_def_annot) in
      let tvars = ASL_Utils.unionSets (List.map (fun (ty, _) -> ASL_Utils.fv_type ty) fields) in
      let tq = mk_typquant (List.map mk_qi_kopt (kopts_of_vars ctx tvars)) in
      let fields' = List.map field' fields in
@@ -2907,7 +2935,7 @@ let rec sail_of_declaration ctx (decl : ASL_AST.declaration) =
          let fun_typ = function_typ [unit_typ] (mk_id_typ id') in
          let typschm = mk_typschm (mk_typquant []) fun_typ in
          let pat = mk_pat (P_lit (mk_lit L_unit)) in
-         let body = mk_exp (E_struct (SN_id id', List.map (fun (ty, id) -> mk_fexp id (default_init ty)) fields')) in
+         let body = mk_exp (E_struct (SN_id id', List.map (fun ((id, ty), _) -> mk_fexp id (default_init ty)) fields')) in
          [mk_val_spec (VS_val_spec (typschm, fun_id, None));
           mk_fundef [mk_funcl fun_id pat body]]
        else []
