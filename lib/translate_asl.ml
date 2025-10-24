@@ -2976,13 +2976,13 @@ let rec sail_of_declaration ctx (decl : ASL_AST.declaration) =
      @ (if kopts = [] then unknown_fun id' ty' else [])
   | Decl_Enum (id, ids, _) ->
      let id' = sail_type_id_of_ident id in
-     let ids' = List.map sail_id_of_ident ids in
+     let ids' = List.map (fun id -> sail_id_of_ident id, mk_def_annot Parse_ast.Unknown ()) ids in
      let default_fn =
          let fun_id = prepend_id "__default_" id' in
          let fun_typ = function_typ [unit_typ] (mk_id_typ id') in
          let typschm = mk_typschm (mk_typquant []) fun_typ in
          let pat = mk_pat (P_lit (mk_lit L_unit)) in
-         let body = mk_exp (E_id (List.hd ids')) in
+         let body = mk_exp (E_id (fst (List.hd ids'))) in
          [mk_val_spec (VS_val_spec (typschm, fun_id, None));
           mk_fundef [mk_funcl fun_id pat body]]
      in
