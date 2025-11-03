@@ -790,6 +790,7 @@ and convert_ast ?use_patches:(use_patches=true) initial_check_ctx ctx = function
            let sail = concat_ast (List.map (Translate_asl.ast_of_declaration ctx) decls) in
            (* let sail = Sail_to_sail.rewrite_overloaded_top sail in *)
            let sail = Sail_to_sail.rewrite_mutated_parameters sail in
+           let sail = Sail_to_sail.rewrite_remove_unused_decls sail in
            write_sail sail (orig_file is_forward chunk);
 
            try
@@ -812,6 +813,7 @@ and convert_ast ?use_patches:(use_patches=true) initial_check_ctx ctx = function
              let ctx = { ctx with tc_env = env } in
              let sail = concat_ast (vals :: (List.map (Translate_asl.ast_of_declaration ctx) decls)) in
              let sail = Sail_to_sail.rewrite_mutated_parameters sail in
+             let sail = Sail_to_sail.rewrite_remove_unused_decls sail in
              let sail = Sail_to_sail.eventually_constant sail in
              let sail = Sail_to_sail.vector_exps sail in
              sail, initial_check_ctx
@@ -830,6 +832,7 @@ and convert_ast ?use_patches:(use_patches=true) initial_check_ctx ctx = function
              let _ = if !write_osails then write_sail sail (orig_file is_forward chunk) in
              (* let sail = Sail_to_sail.rewrite_overloaded_top sail in *)
              let sail = Sail_to_sail.rewrite_mutated_parameters sail in
+             let sail = Sail_to_sail.rewrite_remove_unused_decls sail in
              let sail = Sail_to_sail.eventually_constant sail in
              let sail = Sail_to_sail.vector_exps sail in
              sail, initial_check_ctx

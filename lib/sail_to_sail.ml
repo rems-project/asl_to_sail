@@ -597,6 +597,17 @@ let eventually_constant defs =
        | Some id ->
           assignment :: rewrite_block_0 (rewrite_block_1 id rest)
        end
+    | (E_aux (E_var (lexp, rexp, kexp), ann) as assignment) :: rest
+         when is_undefined rexp ->
+       begin match lexp_id lexp with
+       | None -> assignment :: rewrite_block_0 rest
+       | Some id ->
+          let kexps = match kexp with E_aux (E_block es, _) -> es | _ -> [kexp] in
+          let kexps' = rewrite_block_1 id kexps in
+          (* Keep a block if we start with one, or if we need one *)
+          let kexp' = match kexp, kexps' with _, [] | _, _::_::_ | E_aux (E_block _, _), _ -> mk_exp (E_block kexps') | _, [x] -> x in
+          E_aux (E_var (lexp, rexp, kexp'), ann) :: rewrite_block_0 rest
+       end
     | exp :: exps -> exp :: rewrite_block_0 exps
   and rewrite_block_1 id = function
     | [E_aux (E_let (lb, E_aux (E_block exps, _)), _)] ->
@@ -911,3 +922,87 @@ let rewrite_add_constraint ?(modify_val_spec=true) l global_env nc tyvars local_
      end
 
   | _ -> failwith ("Location must be unique" ^ Reporting.loc_to_string l)
+
+let rewrite_remove_unused_decls ast =
+
+  let rec used_in_exp id (E_aux (e, _)) = match e with
+    | E_id id' -> Id.compare id id' == 0
+    | E_let (LB_aux (LB_val (p, e1), _), e2) ->
+      used_in_exp id e1 || (not (IdSet.mem id (pat_ids p)) && used_in_exp id e2)
+    | E_match (e1, pexps) ->
+      used_in_exp id e1 || List.exists (used_in_pexp id) pexps
+    | E_try (e1, pexps) ->
+      used_in_exp id e1 || List.exists (used_in_pexp id) pexps
+    | E_sizeof _
+    | E_lit _
+    | E_config _
+    | E_ref _
+    | E_constraint _
+      -> false
+    | E_block exps
+    | E_app (_, exps)
+    | E_tuple exps
+    | E_vector exps
+    | E_list exps
+      -> List.exists (used_in_exp id) exps
+    | E_typ (_, e1)
+    | E_field (e1, _)
+    | E_return e1
+    | E_exit e1
+    | E_throw e1
+      -> used_in_exp id e1
+    | E_vector_append (e1, e2)
+    | E_loop (_, _, e1, e2)
+    | E_cons (e1, e2)
+    | E_assert (e1, e2)
+     -> List.exists (used_in_exp id) [e1; e2]
+    | E_if (e1, e2, e3)
+     -> List.exists (used_in_exp id) [e1; e2; e3]
+    | E_for (_, e1, e2, e3, _, e4)
+     -> List.exists (used_in_exp id) [e1; e2; e3; e4]
+    | E_struct (_, fexps) -> List.exists (function FE_aux (FE_fexp (_, e), _) -> used_in_exp id e) fexps
+    | E_struct_update (e1, fexps) -> used_in_exp id e1 || List.exists (function FE_aux (FE_fexp (_, e), _) -> used_in_exp id e) fexps
+    | E_assign (lexp, e1) -> used_in_lexp id lexp || used_in_exp id e1
+    | E_var (lexp, e1, e2) -> used_in_lexp id lexp || used_in_exp id e1 || used_in_exp id e2
+    | E_internal_plet _
+    | E_internal_return _
+    | E_internal_value _
+    | E_internal_assume _ -> assert false
+  and used_in_pexp id = function
+      Pat_aux (Pat_exp (p, e), _) -> not (IdSet.mem id (pat_ids p)) && used_in_exp id e
+    | Pat_aux (Pat_when (p, e1, e2), _) -> not (IdSet.mem id (pat_ids p)) && (used_in_exp id e1 || used_in_exp id e2)
+  and used_in_lexp id (LE_aux (lexp, _)) = match lexp with
+    | LE_id id' -> Id.compare id id' == 0
+    | LE_deref e1
+      -> used_in_exp id e1
+    | LE_app (_, exps)
+      -> List.exists (used_in_exp id) exps
+    | LE_tuple lexps
+    | LE_vector_concat lexps
+      -> List.exists (used_in_lexp id) lexps
+    | LE_typ (_, id') -> Id.compare id id' == 0
+    | LE_vector (lexp, exp)
+      -> used_in_lexp id lexp || used_in_exp id exp
+    | LE_vector_range (lexp, e1, e2) -> used_in_lexp id lexp || used_in_exp id e1 || used_in_exp id e2
+    | LE_field (lexp, _) -> used_in_lexp id lexp
+  in
+
+  let rec rewrite_exp = function
+    | E_aux (E_var (LE_aux (LE_typ (_, id), _), _, k), _) when not (used_in_exp id k) -> k
+    (* Eliminating an E_var might result in nested blocks, so flatten them *)
+    | E_aux (E_block exps, a) -> E_aux (E_block (List.concat_map (function E_aux (E_block exps', _) -> exps' | e -> [e]) exps), a)
+    | exp -> exp
+  in
+
+  let alg = { id_alg with f_exp = rewrite_exp } in
+
+  let map_def (DEF_aux (def,da)) =
+    let def' =
+      match def with
+      | DEF_let (LB_aux (LB_val (p,e), a)) -> DEF_let (LB_aux (LB_val (p, map_exp alg e), a))
+      | DEF_fundef (FD_aux (FD_function (r, a, funcls), a')) -> DEF_fundef (FD_aux (FD_function (r, a, List.map (map_funcl (map_funcl_exps (map_exp alg))) funcls), a'))
+      | d -> d
+    in DEF_aux (def', da)
+  in
+
+  map_ast map_def ast

@@ -104,6 +104,7 @@ type ctx = {
   fun_args : (ASL_AST.ty * ASL_AST.ident) list;
   fun_ret_typ : ASL_AST.ty option;
   locals : lvar Bindings.t;
+  declared_in_scope : IdSet.t;
 }
 
 let fresh_counter = ref 0
@@ -122,6 +123,7 @@ let empty_ctx = {
   fun_args = [];
   fun_ret_typ = None;
   locals = Bindings.empty;
+  declared_in_scope = IdSet.empty;
 }
 
 module StringSet = Set.Make(String)
@@ -552,6 +554,37 @@ let instantiate_fun_implicits (id : ASL_AST.ident) (tes : ASL_AST.expr list) =
      List.concat (List.map2 implicit_arg tvs tes)
   | _ -> []
 
+let pp_to_string doc =
+  let b = Buffer.create 120 in
+  PPrint.ToBuffer.pretty 1. 120 b doc;
+  Buffer.contents b
+
+(* Essentially follows lexpr_of_expr *)
+let rec assigned_vars_of_setter_expr (expr : expr) =
+  match expr with
+  | Expr_Var id -> IdentSet.singleton id
+  | Expr_Slices (e, _) -> assigned_vars_of_setter_expr e
+  | Expr_Field (e, _) -> assigned_vars_of_setter_expr e
+  | Expr_Fields (e, _) -> assigned_vars_of_setter_expr e
+  | Expr_Array (e, _) -> assigned_vars_of_setter_expr e
+  | Expr_Tuple es -> List.fold_left (fun s e -> IdentSet.union s (assigned_vars_of_setter_expr e)) IdentSet.empty es
+  | Expr_TApply (getter, _, args) ->
+     let regexp = Str.regexp_string ".read" in
+     let setter = match args with
+       | [] -> Str.global_replace regexp ".write" (name_of_ident getter)
+       | (_::_) -> Str.global_replace regexp ".set" (name_of_ident getter)
+     in
+     begin match get_asl_sfuntype (Ident setter) with
+       | Some (_, _, _, formals, _) ->
+           let assigned = function
+             | (Formal_InOut _, expr) -> assigned_vars_of_setter_expr expr
+             | (Formal_In _, _) -> IdentSet.empty
+           in
+           unionSets (List.map assigned (List.combine formals args))
+       | None -> IdentSet.empty
+     end
+  | _ -> failwith ("assigned_vars_of_setter_expr: " ^ pp_to_string (ASL_PP.pp_expr expr))
+
 (* Collect variables that are assigned to like in the visitor class defined
    in ASL_Utils, but additionally take into account mutable arguments of
    setter functions.  Also don't consider constant declarations. *)
@@ -564,7 +597,7 @@ class assignedVarsClass = object
        begin match get_asl_sfuntype setter with
          | Some (_, _, _, formals, _) ->
             let assigned = function
-              | (Formal_InOut _, expr) -> fv_expr expr
+              | (Formal_InOut _, expr) -> assigned_vars_of_setter_expr expr
               | (Formal_In _, _) -> IdentSet.empty
             in
             avs <- unionSets (avs :: List.map assigned (List.combine formals args));
@@ -581,6 +614,15 @@ let assigned_vars_of_stmts stmts =
   let open LibASL.Asl_visitor in
   let avs = new assignedVarsClass in
   ignore (visit_stmts (avs :> aslVisitor) stmts);
+  avs#result
+
+let assigned_vars_that_cannot_be_let_bound stmts =
+  let open LibASL.Asl_visitor in
+  let avs = new assignedVarsClass in
+  List.iter (function
+      | Stmt_Assign (LExpr_Var id, r, _) ->
+        ignore (visit_expr (avs :> aslVisitor) r)
+      | stmt -> ignore (visit_stmt (avs :> aslVisitor) stmt)) stmts;
   avs#result
 
 let assigned_vars_of_decl decl =
@@ -606,11 +648,6 @@ let rec has_wildcard_lexpr = function
   | LExpr_BitTuple les | LExpr_Tuple les ->
      List.exists has_wildcard_lexpr les
   | _ -> false
-
-let pp_to_string doc =
-  let b = Buffer.create 120 in
-  PPrint.ToBuffer.pretty 1. 120 b doc;
-  Buffer.contents b
 
 let remove_underscores str = String.concat "" (String.split_on_char '_' str)
 let remove_spaces str = String.concat "" (String.split_on_char ' ' str)
@@ -849,11 +886,14 @@ let is_bits_local ctx = check_local (fun lvar -> is_bits_typ ctx.tc_env (lvar_ty
 
 let local_typ ctx id = lvar_typ (Bindings.find id ctx.locals)
 
+let add_declared_var id ctx =
+  { ctx with declared_in_scope = IdSet.add id ctx.declared_in_scope }
+
 let declare_local ?mut:(mut=Mutable) id typ ctx =
   let id' = sail_id_of_ident id in
   let tc_env' = try Type_check.Env.add_local id' (mut, typ) ctx.tc_env with _ -> ctx.tc_env in
   let locals' = Bindings.add id (Owned (mut, typ)) ctx.locals in
-  { ctx with locals = locals'; tc_env = tc_env' }
+  add_declared_var id' { ctx with locals = locals'; tc_env = tc_env' }
 
 let declare_immutable = declare_local ~mut:Immutable
 
@@ -1987,6 +2027,7 @@ and sail_of_stmt ctx (stmt : ASL_AST.stmt) =
   | ASL_AST.Stmt_VarDecl (ty, id, e, _) ->
      let ty' = sail_of_ty ctx ty in
      let le = mk_lexp (LE_typ (ty', sail_id_of_ident id)) in
+     let ctx = add_declared_var (sail_id_of_ident id) ctx in
      let e' = coerce_exp ctx.tc_env (infer_sail_expr_typ ctx e) (Some ty') (sail_of_expr ctx e) in
      mk_exp (E_assign (le, e'))
   (* TODO: Clean up special casing of assignments and merge with sail_of_assignment *)
@@ -2248,7 +2289,7 @@ and sail_block_of_stmts (ctx : ctx) (stmts : ASL_AST.stmt list) : uannot exp lis
        in
        let id' = sail_id_of_ident id in
        let ctx' = declare_local id ty' ctx in
-       (ctx', mk_exp (E_assign (mk_lexp (LE_typ (ty', id')), e')))
+       (ctx', (id', mk_lexp (LE_typ (ty', id')), e'))
      in
      let init ids = function
        | Stmt_Assign (LExpr_Var id, e, l) when IdentSet.mem id ids ->
@@ -2261,30 +2302,12 @@ and sail_block_of_stmts (ctx : ctx) (stmts : ASL_AST.stmt list) : uannot exp lis
      let (uninitialised, stmts') = List.fold_left_map init (IdentSet.of_list initialised_later) stmts in
      let to_declare_now = IdentSet.union (IdentSet.of_list to_declare_now) uninitialised |> IdentSet.elements in
      let (ctx', decls) = List.fold_left_map decl ctx to_declare_now in
-     decls @ sail_block_of_stmts ctx' stmts'
+     let k = sail_block_of_stmts ctx' stmts' in
+     List.fold_right (fun (id, lexp, e1) k ->
+          if IdSet.mem id ctx.declared_in_scope then (mk_exp (E_assign (lexp, e1)) :: k) else [mk_exp (E_var (lexp, e1, mk_exp (E_block k)))]) decls k
   | (ASL_AST.Stmt_VarDecl (ty, id, e, _) as stmt) :: stmts ->
      let e' = sail_of_expr_rebinds ctx (constrained_vars_of_stmts ctx [stmt]) e in
-     if IdentSet.mem id (assigned_vars_of_stmts stmts) then
-       let constraints = int_constraints_of_stmts (stmt :: stmts) in
-       let ty' =
-         if Bindings.mem id constraints then
-           match Bindings.find id constraints with
-           | IC_Unknown -> local_typ ctx id
-           | c -> sail_typ_of_int_constraint id c
-         else local_typ ctx id
-       in
-       let e'' = coerce_exp ctx.tc_env (infer_sail_expr_typ ctx e) (Some ty') e' in
-       let le = mk_lexp (LE_typ (ty', sail_id_of_ident id)) in
-       mk_exp (E_assign (le, e'')) :: sail_block_of_stmts ctx stmts
-     else
-       (* Bind variables that are not modified (any more) as immutables *)
-       let ty' = sail_of_ty ctx ty in
-       let e'' = coerce_exp ctx.tc_env (infer_sail_expr_typ ctx e) (Some ty') e' in
-       sail_letbind_stmts ctx ty' id e'' stmts
-  | (ASL_AST.Stmt_Assign (LExpr_Var id, e, _) as stmt) :: stmts
-    when is_owned_local ctx id && IdentSet.mem id (fv_stmts stmts) ->
-     let e' = sail_of_expr_rebinds ctx (constrained_vars_of_stmts ctx [stmt]) e in
-     if IdentSet.mem id (assigned_vars_of_stmts stmts) then
+     if IdentSet.mem id (assigned_vars_that_cannot_be_let_bound stmts) then
        let constraints = int_constraints_of_stmts (stmt :: stmts) in
        let ty' =
          if Bindings.mem id constraints then
@@ -2295,7 +2318,32 @@ and sail_block_of_stmts (ctx : ctx) (stmts : ASL_AST.stmt list) : uannot exp lis
        in
        let e'' = coerce_exp ctx.tc_env (infer_sail_expr_typ ctx e) (Some ty') e' in
        let id' = sail_id_of_ident id in
-       mk_exp (E_assign (mk_lexp (LE_typ (ty', id')), e''))
+       let le = mk_lexp (LE_typ (ty', id')) in
+       let ctx' = add_declared_var id' ctx in
+       if IdSet.mem id' ctx.declared_in_scope then
+         mk_exp (E_assign (le, e'')) :: sail_block_of_stmts ctx' stmts
+       else
+       [mk_exp (E_var (le, e'', sail_of_stmts ctx' stmts))]
+     else
+       (* Bind variables that are not modified (any more) as immutables *)
+       let ty' = sail_of_ty ctx ty in
+       let e'' = coerce_exp ctx.tc_env (infer_sail_expr_typ ctx e) (Some ty') e' in
+       sail_letbind_stmts ctx ty' id e'' stmts
+  | (ASL_AST.Stmt_Assign (LExpr_Var id, e, _) as stmt) :: stmts
+    when is_owned_local ctx id && IdentSet.mem id (fv_stmts stmts) ->
+     let e' = sail_of_expr_rebinds ctx (constrained_vars_of_stmts ctx [stmt]) e in
+     if IdentSet.mem id (assigned_vars_that_cannot_be_let_bound stmts) then
+       let constraints = int_constraints_of_stmts (stmt :: stmts) in
+       let ty' =
+         if Bindings.mem id constraints then
+           match Bindings.find id constraints with
+           | IC_Unknown -> local_typ ctx id
+           | c -> sail_typ_of_int_constraint id c
+         else local_typ ctx id
+       in
+       let e'' = coerce_exp ctx.tc_env (infer_sail_expr_typ ctx e) (Some ty') e' in
+       let id' = sail_id_of_ident id in
+       mk_exp (E_assign (mk_lexp (LE_id id'), e''))
        :: sail_block_of_stmts ctx stmts
      else
        let ty' = local_typ ctx id in
