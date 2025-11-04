@@ -1440,15 +1440,10 @@ and add_final_return_optstmts = function
 
 let rec default_init (Typ_aux (ty, _) as typ) =
   match ty with
-  | Typ_id (Id_aux (Id "nat", _))
-  | Typ_id (Id_aux (Id "int", _)) -> mk_lit_exp (L_num Big_int_Z.zero_big_int)
-  | Typ_id (Id_aux (Id "bool", _)) -> mk_lit_exp L_false
-  | Typ_id (Id_aux (Id "bit", _)) -> mk_lit_exp L_zero
-  | Typ_id (Id_aux (Id "real", _)) -> mk_lit_exp (L_real "0.0")
   | Typ_id id -> mk_exp (E_app (prepend_id "__default_" id, [mk_lit_exp L_unit]))
   | Typ_app (Id_aux (Id ("bitvector" | "bits"), _), [A_aux (A_nexp size, _)]) -> mk_exp (E_app (mk_id "Zeros", [mk_exp (E_sizeof size)]))
   | Typ_app (Id_aux (Id "vector", _), [A_aux (A_nexp size, _); A_aux (A_typ typ', _)]) ->
-    mk_exp (E_app (mk_id "vector_init", [mk_exp (E_sizeof size); default_init typ']))
+    mk_exp (E_app (mk_id "__default_vector", [mk_exp (E_sizeof size); default_init typ']))
   | _ -> failwith ("Unsupported type for default values: " ^ string_of_typ typ)
 
 let args_of_exps args =

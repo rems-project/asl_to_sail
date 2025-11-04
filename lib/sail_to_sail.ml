@@ -549,6 +549,7 @@ let rec is_undefined (E_aux (aux, _)) =
   match aux with
   | E_lit (L_aux (L_undef, _)) -> true
   | E_typ (_, exp) -> is_undefined exp
+  | E_app (id, _) -> String.starts_with ~prefix:"__default_" (string_of_id id)
   | _ -> false
 
 let lexp_id (LE_aux (aux, _)) =

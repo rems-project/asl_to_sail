@@ -12,6 +12,17 @@ $include <option.sail>
 $include <mono_rewrites.sail>
 $include <concurrency_interface.sail>
 
+/* ASL default values */
+
+function __default_nat() -> nat = 0
+function __default_int() -> int = 0
+function __default_bool() -> bool = false
+function __default_bit() -> bit = bitzero
+function __default_real() -> real = 0.0
+
+val __default_vector : forall 'n ('t : Type), 'n >= 0. (int('n), 't) -> vector('n, 't)
+function __default_vector(n, t) = vector_init(n, t)
+
 /* These could be given refined types, if necessary */
 val implies : (bool, bool) -> bool
 function implies(p,q) = not_bool(p) | q
